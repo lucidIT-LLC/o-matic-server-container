@@ -1,6 +1,16 @@
 # O-Matic Server
 
-The database brain for O-Matic factories: **PostgreSQL 18 + pgvector (HNSW) + pg_cron**, packaged as a container image with a reproducible schema and a bring-your-own-key embedding path. Single database — no external vector store.
+The **database brain** for an O-Matic factory. An O-Matic factory is a set of AI agents that share persistent memory, governed rules, task state, and decision history — none of which survives in a chat window. This server is where all of that lives: **PostgreSQL 18 + pgvector (HNSW) + pg_cron**, packaged as a container image with a reproducible schema and a bring-your-own-key embedding path. One database — no external vector store, no second system to coordinate.
+
+If you connect an O-Matic agent (Probot, Fred, Data, …) to this server, the agent gains: semantic + keyword recall over everything the factory knows, rules it must follow, a task board, a decision log, and an audit trail. Without it, the agents still run — they just start blank every session.
+
+## Requirements
+
+- **A container host** — Docker or Podman (Unraid, a Linux box, a VPS, etc.) with a **persistent volume** for the Postgres data directory. ~1 GB RAM and a modest CPU are plenty for a single factory.
+- **`psql`** (PostgreSQL client) on whatever machine runs setup.
+- **Python 3** (standard library only — no pip installs) for the embedding refresh script.
+- **An OpenAI API key** *(optional)* for embeddings. Without one, the factory runs **FTS-only** (keyword search works, semantic search is off) and never fails — add a key any time via `setup.sh`. Embeddings use `text-embedding-3-small`; cost is ~$0.02 per 1M tokens (pennies/year at typical volume).
+- **Network egress to `api.openai.com`** from wherever the embedding script runs (the host, or a CI runner). Postgres itself never calls out — it can't, by design.
 
 ## What's in the image
 

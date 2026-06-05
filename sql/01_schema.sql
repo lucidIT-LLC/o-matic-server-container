@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict ZsD4UZGW8Uq63BmdiHtJPUwMJ2K7b1293Pv6sf4E97Ig8tJiJfRZbbIHov6nCxh
+\restrict J1jM5rGdT7geAnNpDE1aMZuZePVcefBQZhqB5sCBSZ6VkX0LHaAzBIscLUZO03s
 
 -- Dumped from database version 18.3 (Debian 18.3-1.pgdg12+1)
 -- Dumped by pg_dump version 18.3
@@ -190,10 +190,13 @@ CREATE FUNCTION public.fn_refresh_dashboards() RETURNS void
     LANGUAGE plpgsql
     AS $$
 BEGIN
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mv_dashboard;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mv_embedding_health;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mv_agent_eval_status;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mv_factory_kernel_health;
+  -- Non-concurrent: mv_dashboard is a single-row aggregate with no unique key,
+  -- so CONCURRENTLY is impossible. The brief refresh lock is negligible at
+  -- factory write volume, and matches fn_refresh_startup's approach.
+  REFRESH MATERIALIZED VIEW mv_dashboard;
+  REFRESH MATERIALIZED VIEW mv_embedding_health;
+  REFRESH MATERIALIZED VIEW mv_agent_eval_status;
+  REFRESH MATERIALIZED VIEW mv_factory_kernel_health;
 END;
 $$;
 
@@ -4053,5 +4056,5 @@ ALTER TABLE ONLY public.tasks
 -- PostgreSQL database dump complete
 --
 
-\unrestrict ZsD4UZGW8Uq63BmdiHtJPUwMJ2K7b1293Pv6sf4E97Ig8tJiJfRZbbIHov6nCxh
+\unrestrict J1jM5rGdT7geAnNpDE1aMZuZePVcefBQZhqB5sCBSZ6VkX0LHaAzBIscLUZO03s
 
