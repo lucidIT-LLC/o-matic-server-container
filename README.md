@@ -26,22 +26,16 @@ Retrieval is hybrid (FTS + vector via RRF). Embeddings are OpenAI `text-embeddin
 ## Setup
 
 1. **Start the container** against a data volume.
-2. **Enable pg_cron** (one-time; requires a restart for the preload):
+2. **Enable pg_cron** — one-time, and the only step that needs a restart (it's a Postgres preload requirement):
    ```sql
-   ALTER SYSTEM SET shared_preload_libraries = 'pg_cron';
-   -- restart the container, then:
-   CREATE EXTENSION IF NOT EXISTS pg_cron;
+   ALTER SYSTEM SET shared_preload_libraries = 'pg_cron';   -- then restart the container
    ```
-3. **Load the schema and maintenance bootstrap:**
-   ```bash
-   psql "$DSN" -f sql/01_schema.sql
-   psql "$DSN" -f sql/02_bootstrap.sql   # pg_cron MV-refresh job
-   ```
-4. **Onboard your embedding key** (bring your own — the image ships with none):
+3. **Run setup** — loads the schema, schedules maintenance, and onboards your key:
    ```bash
    TENANT=myfactory ./scripts/setup.sh
    ```
-   The script guides you through creating an OpenAI key, validates it, stores it (env or DB, your choice), and backfills embeddings. Until a key is present the factory runs **FTS-only** — keyword search works, vector search is disabled; it does not hard-fail.
+
+`setup.sh` is the single entry point: it loads `sql/01_schema.sql` if the schema is absent, applies the `sql/02_bootstrap.sql` maintenance job (skipped with a notice if pg_cron isn't enabled yet — just re-run after step 2), then guides you through creating an OpenAI key, validates it, stores it (env or DB, your choice), and backfills embeddings. Until a key is present the factory runs **FTS-only** — keyword search works, vector search is disabled; it never hard-fails. The `sql/` files remain runnable on their own if you prefer to apply them manually.
 
 ## Maintenance
 
