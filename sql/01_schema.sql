@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict J1jM5rGdT7geAnNpDE1aMZuZePVcefBQZhqB5sCBSZ6VkX0LHaAzBIscLUZO03s
+\restrict tdKnhmigJeJxBsRQQgPmJopeXyHehkcwWkYdHwYTEbjasYJOsAcjdyKSyRs4fBH
 
 -- Dumped from database version 18.3 (Debian 18.3-1.pgdg12+1)
 -- Dumped by pg_dump version 18.3
@@ -19,18 +19,41 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
---
--- Name: vector; Type: EXTENSION; Schema: -; Owner: -
---
-
 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 
+--
+-- Name: brain; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA IF NOT EXISTS brain;
+
 
 --
--- Name: EXTENSION vector; Type: COMMENT; Schema: -; Owner: -
+-- Name: brand; Type: SCHEMA; Schema: -; Owner: -
 --
 
-COMMENT ON EXTENSION vector IS 'vector data type and ivfflat and hnsw access methods';
+CREATE SCHEMA IF NOT EXISTS brand;
+
+
+--
+-- Name: factory; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA IF NOT EXISTS factory;
+
+
+--
+-- Name: public; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA IF NOT EXISTS public;
+
+
+--
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON SCHEMA public IS 'standard public schema';
 
 
 --
@@ -67,7 +90,7 @@ CREATE FUNCTION public.fn_document_chunk_delete_cleanup() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
       BEGIN
-        DELETE FROM public.semantic_index
+        DELETE FROM brain.semantic_index
          WHERE tenant_id = COALESCE(OLD.tenant_id, 'omatic')
            AND source_table = 'document_chunks'
            AND source_id = OLD.id::text;
@@ -114,6 +137,59 @@ BEGIN
      AND source_id = v_source_id;
   RETURN NEW;
 END $$;
+
+
+--
+-- Name: fn_persona_identity_signature(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.fn_persona_identity_signature(p_version_id integer) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+  WITH ver AS (
+    SELECT 'V|'||coalesce(role,'~')||'|'||coalesce(one_liner,'~')||'|'||coalesce(summary,'~')
+           ||'|'||array_to_string(trigger_phrases,'#') AS s
+    FROM persona_version WHERE id=p_version_id
+  ),
+  bible AS (
+    SELECT 'B|'||coalesce(archetype,'~')||'|'||coalesce(backstory,'~')||'|'||coalesce(personality,'~')
+           ||'|'||coalesce(character_depth,'~')||'|'||coalesce(humor,'~')||'|'||coalesce(seriousness_boundary,'~')
+           ||'|'||coalesce(evolution_history,'~')||'|'||array_to_string(traits,'#')||'|'||coalesce(emoji,'~') AS s
+    FROM persona_character_bible WHERE version_id=p_version_id
+  ),
+  voice AS (
+    SELECT 'VC|'||coalesce(opening_convention,'~')||'|'||coalesce(register,'~')||'|'||coalesce(voice_texture,'~')
+           ||'|'||array_to_string(voice_anchors,'#')||'|'||array_to_string(sample_lines,'#')
+           ||'|'||array_to_string(forbidden_phrasings,'#')||'|'||coalesce(emoji_policy,'~') AS s
+    FROM persona_voice_contract WHERE version_id=p_version_id
+  ),
+  lane AS (
+    SELECT 'L|'||coalesce(primary_domain,'~')||'|'||array_to_string(does,'#')||'|'||array_to_string(does_not,'#')
+           ||'|'||coalesce(handoffs::text,'~')||'|'||coalesce(suppression_rules,'~') AS s
+    FROM persona_lane_contract WHERE version_id=p_version_id
+  ),
+  arch AS (
+    SELECT string_agg('A|'||layer||'|'||archetype_name||'|'||coalesce(description,'~'),'||' ORDER BY sort_order,layer) AS s
+    FROM persona_archetype WHERE version_id=p_version_id
+  ),
+  dims AS (
+    SELECT string_agg('D|'||dimension||'|'||content,'||' ORDER BY sort_order,dimension) AS s
+    FROM persona_character_dimension WHERE version_id=p_version_id
+  ),
+  str AS (
+    SELECT string_agg('S|'||strength||'|'||coalesce(description,'~'),'||' ORDER BY sort_order,strength) AS s
+    FROM persona_strength WHERE version_id=p_version_id
+  )
+  SELECT md5(
+    coalesce((SELECT s FROM ver),'')  ||chr(30)||
+    coalesce((SELECT s FROM bible),'')||chr(30)||
+    coalesce((SELECT s FROM voice),'')||chr(30)||
+    coalesce((SELECT s FROM lane),'') ||chr(30)||
+    coalesce((SELECT s FROM arch),'') ||chr(30)||
+    coalesce((SELECT s FROM dims),'') ||chr(30)||
+    coalesce((SELECT s FROM str),'')
+  );
+$$;
 
 
 --
@@ -168,7 +244,7 @@ CREATE FUNCTION public.fn_record_retrieval_event(p_query_text text, p_search_fun
 DECLARE
   v_id bigint;
 BEGIN
-  INSERT INTO public.retrieval_events (
+  INSERT INTO factory.retrieval_events (
     tenant_id, caller, search_function, query_text, used_vector, result_ids, latency_ms
   )
   VALUES (
@@ -217,6 +293,60 @@ $$;
 
 
 --
+-- Name: fn_render_l1_skill(integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.fn_render_l1_skill(p_version_id integer) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+SELECT
+'<!-- GENERATED ARTIFACT — rendered from O-Matic persona record. Do not hand-edit. -->'||E'\n'||
+'<!-- agent: '||p.agent_name||' | version: '||pv.version||' | identity_version: '||coalesce(pv.identity_version::text,'?')||' | identity_signature: '||coalesce(pv.identity_signature,'UNSIGNED')||' -->'||E'\n\n'||
+'# '||initcap(p.agent_name)||coalesce(' — '||pv.role,'')||E'\n\n'||
+coalesce('> '||pv.one_liner||E'\n\n','')||
+'**Callsign:** '||p.callsign||' | **Factory:** '||p.factory_type||' | **Status:** '||p.status||coalesce(' | **Emoji:** '||b.emoji,'')||E'\n\n'||
+'## Identity'||E'\n\n'||coalesce(pv.summary,'')||E'\n\n'||
+coalesce('**Trigger phrases:** '||array_to_string(pv.trigger_phrases,', ')||E'\n\n','')||
+'## Archetype Hierarchy'||E'\n\n'||
+coalesce((SELECT string_agg('- **'||layer||'** — '||archetype_name||': '||coalesce(description,''),E'\n' ORDER BY sort_order,layer) FROM persona_archetype WHERE version_id=p_version_id),'')||E'\n\n'||
+coalesce('> Guardrail: '||b.archetype||E'\n\n','')||
+'## Character'||E'\n\n'||
+coalesce('**Personality.** '||b.personality||E'\n\n','')||
+coalesce('**Backstory.** '||b.backstory||E'\n\n','')||
+coalesce('**Depth.** '||b.character_depth||E'\n\n','')||
+coalesce('**Humor.** '||b.humor||E'\n\n','')||
+coalesce('**Seriousness boundary.** '||b.seriousness_boundary||E'\n\n','')||
+coalesce('**Traits:** '||array_to_string(b.traits,', ')||E'\n\n','')||
+'### Character Dimensions'||E'\n\n'||
+coalesce((SELECT string_agg('- **'||dimension||'** — '||content,E'\n' ORDER BY sort_order,dimension) FROM persona_character_dimension WHERE version_id=p_version_id),'')||E'\n\n'||
+'## Voice'||E'\n\n'||
+coalesce('**Opening convention.** '||v.opening_convention||E'\n\n','')||
+coalesce('**Register.** '||v.register||E'\n\n','')||
+coalesce('**Texture.** '||v.voice_texture||E'\n\n','')||
+coalesce('**Anchors:** '||array_to_string(v.voice_anchors,' · ')||E'\n\n','')||
+coalesce('**Sample lines:**'||E'\n\n> '||array_to_string(v.sample_lines,E'\n> ')||E'\n\n','')||
+coalesce('**Forbidden:**'||E'\n\n- '||array_to_string(v.forbidden_phrasings,E'\n- ')||E'\n\n','')||
+coalesce('**Emoji policy.** '||v.emoji_policy||E'\n\n','')||
+'## Lane'||E'\n\n'||
+coalesce('**Primary domain:** '||l.primary_domain||E'\n\n','')||
+coalesce('**Does:** '||array_to_string(l.does,', ')||E'\n\n','')||
+coalesce('**Routes away:**'||E'\n\n- '||array_to_string(l.does_not,E'\n- ')||E'\n\n','')||
+coalesce('**Suppression.** '||l.suppression_rules||E'\n\n','')||
+'## Strengths'||E'\n\n'||
+coalesce((SELECT string_agg('- **'||strength||'** — '||coalesce(description,''),E'\n' ORDER BY sort_order,strength) FROM persona_strength WHERE version_id=p_version_id),'')||E'\n\n'||
+'## Tools'||E'\n\n'||
+coalesce((SELECT string_agg('- `'||tool_name||'` — '||coalesce(purpose,''),E'\n' ORDER BY sort_order,tool_name) FROM persona_tool WHERE version_id=p_version_id),'')||E'\n\n'||
+'<!-- ADAPTER SECTION (platform-specific) — filled by build agent under eval gate, NOT part of identity_signature. -->'||E'\n'
+FROM persona_version pv
+JOIN persona p ON p.agent_name=pv.agent_name
+LEFT JOIN persona_character_bible b ON b.version_id=pv.id
+LEFT JOIN persona_voice_contract v ON v.version_id=pv.id
+LEFT JOIN persona_lane_contract l ON l.version_id=pv.id
+WHERE pv.id=p_version_id;
+$$;
+
+
+--
 -- Name: fn_run_retrieval_eval_fts(text, text, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -232,13 +362,13 @@ DECLARE
   v_first_match integer;
   v_latency integer;
 BEGIN
-  INSERT INTO public.retrieval_eval_runs (tenant_id, run_label, run_by, embedding_mode, notes)
+  INSERT INTO factory.retrieval_eval_runs (tenant_id, run_label, run_by, embedding_mode, notes)
   VALUES (p_tenant_id, p_run_label, p_run_by, 'fts_only', 'FTS-only retrieval eval using NULL::vector.')
   RETURNING retrieval_eval_runs.run_id INTO v_run_id;
 
   FOR v_case IN
     SELECT *
-    FROM public.retrieval_eval_cases
+    FROM factory.retrieval_eval_cases
     WHERE tenant_id = p_tenant_id
       AND active = true
     ORDER BY case_id
@@ -283,7 +413,7 @@ BEGIN
 
     v_latency := floor(extract(epoch FROM (clock_timestamp() - v_started)) * 1000)::int;
 
-    INSERT INTO public.retrieval_eval_results (
+    INSERT INTO factory.retrieval_eval_results (
       run_id, case_id, top_k, returned_sources, expected_found, first_match_rank, latency_ms
     )
     VALUES (
@@ -294,7 +424,7 @@ BEGIN
     RETURN QUERY SELECT v_run_id, v_case.case_id, COALESCE(v_expected_found, false), v_first_match;
   END LOOP;
 
-  UPDATE public.retrieval_eval_runs
+  UPDATE factory.retrieval_eval_runs
   SET completed_at = now()
   WHERE retrieval_eval_runs.run_id = v_run_id;
 END;
@@ -526,33 +656,15 @@ END;
 $$;
 
 
+SET default_tablespace = '';
+
 SET default_table_access_method = heap;
 
 --
--- Name: agent_identity; Type: TABLE; Schema: public; Owner: -
+-- Name: agent_memory; Type: TABLE; Schema: brain; Owner: -
 --
 
-CREATE TABLE public.agent_identity (
-    agent_name character varying NOT NULL,
-    callsign character varying NOT NULL,
-    factory_type character varying NOT NULL,
-    personality_tags text[] DEFAULT '{}'::text[] NOT NULL,
-    tone_descriptor text NOT NULL,
-    voice_anchor text,
-    trigger_phrases text[] DEFAULT '{}'::text[] NOT NULL,
-    primary_domain text NOT NULL,
-    tenant_id text DEFAULT 'omatic'::text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT agent_identity_factory_type_check CHECK (((factory_type)::text = ANY (ARRAY[('closed'::character varying)::text, ('standalone'::character varying)::text])))
-);
-
-
---
--- Name: agent_memory; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.agent_memory (
+CREATE TABLE brain.agent_memory (
     id integer NOT NULL,
     agent_name text NOT NULL,
     memory_type text NOT NULL,
@@ -564,10 +676,10 @@ CREATE TABLE public.agent_memory (
 
 
 --
--- Name: agent_memory_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: agent_memory_id_seq; Type: SEQUENCE; Schema: brain; Owner: -
 --
 
-CREATE SEQUENCE public.agent_memory_id_seq
+CREATE SEQUENCE brain.agent_memory_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -577,36 +689,270 @@ CREATE SEQUENCE public.agent_memory_id_seq
 
 
 --
--- Name: agent_memory_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: agent_memory_id_seq; Type: SEQUENCE OWNED BY; Schema: brain; Owner: -
 --
 
-ALTER SEQUENCE public.agent_memory_id_seq OWNED BY public.agent_memory.id;
+ALTER SEQUENCE brain.agent_memory_id_seq OWNED BY brain.agent_memory.id;
 
 
 --
--- Name: agent_state; Type: TABLE; Schema: public; Owner: -
+-- Name: docling_registry; Type: TABLE; Schema: brain; Owner: -
 --
 
-CREATE TABLE public.agent_state (
-    agent_name character varying(50) NOT NULL,
-    role character varying(100),
-    version character varying(20),
-    state_sig integer,
-    source_file text,
-    status character varying(20),
-    updated_at timestamp with time zone DEFAULT now(),
-    factory character varying DEFAULT 'closed_factory'::character varying,
-    installed_at timestamp with time zone,
-    skill_file_path text,
-    tenant_id text DEFAULT 'omatic'::text NOT NULL
+CREATE TABLE brain.docling_registry (
+    id integer NOT NULL,
+    file_path text NOT NULL,
+    category character varying(40) NOT NULL,
+    description text,
+    docling_required boolean DEFAULT false NOT NULL,
+    scope character varying(40) DEFAULT 'omatic'::character varying,
+    notes text,
+    created_at timestamp with time zone DEFAULT now()
 );
 
 
 --
--- Name: brand_messaging; Type: TABLE; Schema: public; Owner: -
+-- Name: docling_registry_id_seq; Type: SEQUENCE; Schema: brain; Owner: -
 --
 
-CREATE TABLE public.brand_messaging (
+CREATE SEQUENCE brain.docling_registry_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: docling_registry_id_seq; Type: SEQUENCE OWNED BY; Schema: brain; Owner: -
+--
+
+ALTER SEQUENCE brain.docling_registry_id_seq OWNED BY brain.docling_registry.id;
+
+
+--
+-- Name: document_chunks; Type: TABLE; Schema: brain; Owner: -
+--
+
+CREATE TABLE brain.document_chunks (
+    id integer NOT NULL,
+    source_type text NOT NULL,
+    source_id integer,
+    chunk_index integer NOT NULL,
+    content text NOT NULL,
+    token_count integer,
+    created_at timestamp with time zone DEFAULT now(),
+    source_name text,
+    embedded_at timestamp with time zone,
+    model_version text,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    embedding public.vector(1536),
+    embedding_stale boolean DEFAULT false NOT NULL,
+    tsv tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, COALESCE(content, ''::text))) STORED
+);
+
+
+--
+-- Name: COLUMN document_chunks.model_version; Type: COMMENT; Schema: brain; Owner: -
+--
+
+COMMENT ON COLUMN brain.document_chunks.model_version IS 'Embedding model used to generate this vector. e.g. nomic-embed-text, nomic-embed-text:v1.5';
+
+
+--
+-- Name: document_chunks_id_seq; Type: SEQUENCE; Schema: brain; Owner: -
+--
+
+CREATE SEQUENCE brain.document_chunks_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: document_chunks_id_seq; Type: SEQUENCE OWNED BY; Schema: brain; Owner: -
+--
+
+ALTER SEQUENCE brain.document_chunks_id_seq OWNED BY brain.document_chunks.id;
+
+
+--
+-- Name: project_knowledge; Type: TABLE; Schema: brain; Owner: -
+--
+
+CREATE TABLE brain.project_knowledge (
+    id integer NOT NULL,
+    knowledge_type text NOT NULL,
+    title text NOT NULL,
+    detail text NOT NULL,
+    tags text[],
+    source text,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    is_active boolean DEFAULT true,
+    notes text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT chk_knowledge_type CHECK ((knowledge_type = ANY (ARRAY['framework'::text, 'project-context'::text, 'design-standard'::text, 'operator-context'::text, 'product'::text, 'architecture'::text, 'process'::text])))
+);
+
+
+--
+-- Name: TABLE project_knowledge; Type: COMMENT; Schema: brain; Owner: -
+--
+
+COMMENT ON TABLE brain.project_knowledge IS 'Contextual knowledge that does not fit SOPs, rules, or config. Queryable by knowledge_type. Replaces factory_memory pattern.';
+
+
+--
+-- Name: project_knowledge_id_seq; Type: SEQUENCE; Schema: brain; Owner: -
+--
+
+CREATE SEQUENCE brain.project_knowledge_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: project_knowledge_id_seq; Type: SEQUENCE OWNED BY; Schema: brain; Owner: -
+--
+
+ALTER SEQUENCE brain.project_knowledge_id_seq OWNED BY brain.project_knowledge.id;
+
+
+--
+-- Name: research; Type: TABLE; Schema: brain; Owner: -
+--
+
+CREATE TABLE brain.research (
+    id integer NOT NULL,
+    topic text NOT NULL,
+    summary text NOT NULL,
+    sources jsonb DEFAULT '[]'::jsonb,
+    tags text[] DEFAULT '{}'::text[],
+    collected_by text DEFAULT 'probot'::text NOT NULL,
+    session_id integer,
+    status text DEFAULT 'active'::text NOT NULL,
+    superseded_by integer,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT research_status_check CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text, 'superseded'::text])))
+);
+
+
+--
+-- Name: research_id_seq; Type: SEQUENCE; Schema: brain; Owner: -
+--
+
+CREATE SEQUENCE brain.research_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: research_id_seq; Type: SEQUENCE OWNED BY; Schema: brain; Owner: -
+--
+
+ALTER SEQUENCE brain.research_id_seq OWNED BY brain.research.id;
+
+
+--
+-- Name: semantic_index; Type: TABLE; Schema: brain; Owner: -
+--
+
+CREATE TABLE brain.semantic_index (
+    id bigint NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    source_table text NOT NULL,
+    source_id text NOT NULL,
+    entity_type text NOT NULL,
+    summary_text text NOT NULL,
+    embedding public.vector(1536),
+    model_version text,
+    embedded_at timestamp with time zone,
+    embedding_stale boolean DEFAULT false NOT NULL,
+    tsv tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, COALESCE(summary_text, ''::text))) STORED,
+    authority_tier text DEFAULT 'operational'::text,
+    CONSTRAINT chk_authority_tier CHECK ((authority_tier = ANY (ARRAY['sacred'::text, 'canon'::text, 'operational'::text, 'experimental'::text, 'archived'::text, 'deprecated'::text])))
+);
+
+
+--
+-- Name: semantic_index_id_seq; Type: SEQUENCE; Schema: brain; Owner: -
+--
+
+CREATE SEQUENCE brain.semantic_index_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: semantic_index_id_seq; Type: SEQUENCE OWNED BY; Schema: brain; Owner: -
+--
+
+ALTER SEQUENCE brain.semantic_index_id_seq OWNED BY brain.semantic_index.id;
+
+
+--
+-- Name: brand_assets; Type: TABLE; Schema: brand; Owner: -
+--
+
+CREATE TABLE brand.brand_assets (
+    id integer NOT NULL,
+    filename text NOT NULL,
+    rel_path text NOT NULL,
+    ext text,
+    bytes integer,
+    sha256 text,
+    width integer,
+    height integer,
+    origin_folder text,
+    is_master boolean,
+    notes text,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    indexed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: brand_assets_id_seq; Type: SEQUENCE; Schema: brand; Owner: -
+--
+
+CREATE SEQUENCE brand.brand_assets_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: brand_assets_id_seq; Type: SEQUENCE OWNED BY; Schema: brand; Owner: -
+--
+
+ALTER SEQUENCE brand.brand_assets_id_seq OWNED BY brand.brand_assets.id;
+
+
+--
+-- Name: brand_messaging; Type: TABLE; Schema: brand; Owner: -
+--
+
+CREATE TABLE brand.brand_messaging (
     id integer NOT NULL,
     category text NOT NULL,
     sub_type text,
@@ -622,17 +968,17 @@ CREATE TABLE public.brand_messaging (
 
 
 --
--- Name: TABLE brand_messaging; Type: COMMENT; Schema: public; Owner: -
+-- Name: TABLE brand_messaging; Type: COMMENT; Schema: brand; Owner: -
 --
 
-COMMENT ON TABLE public.brand_messaging IS 'Brand intelligence — Brandy queries this before any brand writing. Source of truth for voice, positioning, and messaging.';
+COMMENT ON TABLE brand.brand_messaging IS 'Brand intelligence — Brandy queries this before any brand writing. Source of truth for voice, positioning, and messaging.';
 
 
 --
--- Name: brand_messaging_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: brand_messaging_id_seq; Type: SEQUENCE; Schema: brand; Owner: -
 --
 
-CREATE SEQUENCE public.brand_messaging_id_seq
+CREATE SEQUENCE brand.brand_messaging_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -642,17 +988,17 @@ CREATE SEQUENCE public.brand_messaging_id_seq
 
 
 --
--- Name: brand_messaging_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: brand_messaging_id_seq; Type: SEQUENCE OWNED BY; Schema: brand; Owner: -
 --
 
-ALTER SEQUENCE public.brand_messaging_id_seq OWNED BY public.brand_messaging.id;
+ALTER SEQUENCE brand.brand_messaging_id_seq OWNED BY brand.brand_messaging.id;
 
 
 --
--- Name: content_staging; Type: TABLE; Schema: public; Owner: -
+-- Name: content_staging; Type: TABLE; Schema: brand; Owner: -
 --
 
-CREATE TABLE public.content_staging (
+CREATE TABLE brand.content_staging (
     id integer NOT NULL,
     title text NOT NULL,
     content_type text NOT NULL,
@@ -673,10 +1019,10 @@ CREATE TABLE public.content_staging (
 
 
 --
--- Name: content_staging_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: content_staging_id_seq; Type: SEQUENCE; Schema: brand; Owner: -
 --
 
-CREATE SEQUENCE public.content_staging_id_seq
+CREATE SEQUENCE brand.content_staging_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -686,21 +1032,60 @@ CREATE SEQUENCE public.content_staging_id_seq
 
 
 --
--- Name: content_staging_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: content_staging_id_seq; Type: SEQUENCE OWNED BY; Schema: brand; Owner: -
 --
 
-ALTER SEQUENCE public.content_staging_id_seq OWNED BY public.content_staging.id;
+ALTER SEQUENCE brand.content_staging_id_seq OWNED BY brand.content_staging.id;
 
 
 --
--- Name: decisions; Type: TABLE; Schema: public; Owner: -
+-- Name: agent_identity; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.decisions (
+CREATE TABLE factory.agent_identity (
+    agent_name character varying NOT NULL,
+    callsign character varying NOT NULL,
+    factory_type character varying NOT NULL,
+    personality_tags text[] DEFAULT '{}'::text[] NOT NULL,
+    tone_descriptor text NOT NULL,
+    voice_anchor text,
+    trigger_phrases text[] DEFAULT '{}'::text[] NOT NULL,
+    primary_domain text NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT agent_identity_factory_type_check CHECK (((factory_type)::text = ANY (ARRAY[('closed'::character varying)::text, ('standalone'::character varying)::text])))
+);
+
+
+--
+-- Name: agent_state; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.agent_state (
+    agent_name character varying(50) NOT NULL,
+    role character varying(100),
+    version character varying(20),
+    state_sig integer,
+    source_file text,
+    status character varying(20),
+    updated_at timestamp with time zone DEFAULT now(),
+    factory character varying DEFAULT 'closed_factory'::character varying,
+    installed_at timestamp with time zone,
+    skill_file_path text,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL
+);
+
+
+--
+-- Name: decisions; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.decisions (
     id integer NOT NULL,
     decision_date date NOT NULL,
-    category character varying(50),
-    title character varying(200),
+    category character varying(50) NOT NULL,
+    title character varying(200) NOT NULL,
     decision text,
     rationale text,
     made_by character varying(50),
@@ -714,10 +1099,10 @@ CREATE TABLE public.decisions (
 
 
 --
--- Name: decisions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: decisions_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.decisions_id_seq
+CREATE SEQUENCE factory.decisions_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -727,17 +1112,31 @@ CREATE SEQUENCE public.decisions_id_seq
 
 
 --
--- Name: decisions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: decisions_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.decisions_id_seq OWNED BY public.decisions.id;
+ALTER SEQUENCE factory.decisions_id_seq OWNED BY factory.decisions.id;
 
 
 --
--- Name: decommissioned_terms; Type: TABLE; Schema: public; Owner: -
+-- Name: decommissioned_term_allowlist; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.decommissioned_terms (
+CREATE TABLE factory.decommissioned_term_allowlist (
+    source_table text NOT NULL,
+    source_id text NOT NULL,
+    term text NOT NULL,
+    reason text,
+    allowed_at timestamp with time zone DEFAULT now() NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL
+);
+
+
+--
+-- Name: decommissioned_terms; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.decommissioned_terms (
     term text NOT NULL,
     retired_in text NOT NULL,
     retired_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -747,95 +1146,10 @@ CREATE TABLE public.decommissioned_terms (
 
 
 --
--- Name: docling_registry; Type: TABLE; Schema: public; Owner: -
+-- Name: factory_agreements; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.docling_registry (
-    id integer NOT NULL,
-    file_path text NOT NULL,
-    category character varying(40) NOT NULL,
-    description text,
-    docling_required boolean DEFAULT false NOT NULL,
-    scope character varying(40) DEFAULT 'omatic'::character varying,
-    notes text,
-    created_at timestamp with time zone DEFAULT now()
-);
-
-
---
--- Name: docling_registry_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.docling_registry_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: docling_registry_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.docling_registry_id_seq OWNED BY public.docling_registry.id;
-
-
---
--- Name: document_chunks; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.document_chunks (
-    id integer NOT NULL,
-    source_type text NOT NULL,
-    source_id integer,
-    chunk_index integer NOT NULL,
-    content text NOT NULL,
-    token_count integer,
-    created_at timestamp with time zone DEFAULT now(),
-    source_name text,
-    embedded_at timestamp with time zone,
-    model_version text,
-    tenant_id text DEFAULT 'omatic'::text NOT NULL,
-    embedding public.vector(1536),
-    embedding_stale boolean DEFAULT false NOT NULL,
-    tsv tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, COALESCE(content, ''::text))) STORED
-);
-
-
---
--- Name: COLUMN document_chunks.model_version; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.document_chunks.model_version IS 'Embedding model used to generate this vector. e.g. nomic-embed-text, nomic-embed-text:v1.5';
-
-
---
--- Name: document_chunks_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.document_chunks_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: document_chunks_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.document_chunks_id_seq OWNED BY public.document_chunks.id;
-
-
---
--- Name: factory_agreements; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.factory_agreements (
+CREATE TABLE factory.factory_agreements (
     id integer NOT NULL,
     tenant_id text DEFAULT 'omatic'::text NOT NULL,
     agent_name text NOT NULL,
@@ -851,10 +1165,10 @@ CREATE TABLE public.factory_agreements (
 
 
 --
--- Name: factory_agreements_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: factory_agreements_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.factory_agreements_id_seq
+CREATE SEQUENCE factory.factory_agreements_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -864,17 +1178,17 @@ CREATE SEQUENCE public.factory_agreements_id_seq
 
 
 --
--- Name: factory_agreements_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: factory_agreements_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.factory_agreements_id_seq OWNED BY public.factory_agreements.id;
+ALTER SEQUENCE factory.factory_agreements_id_seq OWNED BY factory.factory_agreements.id;
 
 
 --
--- Name: factory_config; Type: TABLE; Schema: public; Owner: -
+-- Name: factory_config; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.factory_config (
+CREATE TABLE factory.factory_config (
     key text NOT NULL,
     value jsonb NOT NULL,
     category text NOT NULL,
@@ -886,10 +1200,25 @@ CREATE TABLE public.factory_config (
 
 
 --
--- Name: factory_sessions; Type: TABLE; Schema: public; Owner: -
+-- Name: factory_lanes; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.factory_sessions (
+CREATE TABLE factory.factory_lanes (
+    lane text NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    owner_agents text[] NOT NULL,
+    reviewer_agent text,
+    parallel_eligible boolean DEFAULT false NOT NULL,
+    exclusive_resources text[] DEFAULT '{}'::text[] NOT NULL,
+    notes text
+);
+
+
+--
+-- Name: factory_sessions; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.factory_sessions (
     id integer NOT NULL,
     session_date date NOT NULL,
     platform character varying(50),
@@ -903,10 +1232,10 @@ CREATE TABLE public.factory_sessions (
 
 
 --
--- Name: factory_sessions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: factory_sessions_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.factory_sessions_id_seq
+CREATE SEQUENCE factory.factory_sessions_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -916,17 +1245,17 @@ CREATE SEQUENCE public.factory_sessions_id_seq
 
 
 --
--- Name: factory_sessions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: factory_sessions_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.factory_sessions_id_seq OWNED BY public.factory_sessions.id;
+ALTER SEQUENCE factory.factory_sessions_id_seq OWNED BY factory.factory_sessions.id;
 
 
 --
--- Name: known_rules; Type: TABLE; Schema: public; Owner: -
+-- Name: known_rules; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.known_rules (
+CREATE TABLE factory.known_rules (
     id integer NOT NULL,
     category character varying(50) NOT NULL,
     rule text,
@@ -945,10 +1274,10 @@ CREATE TABLE public.known_rules (
 
 
 --
--- Name: known_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: known_rules_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.known_rules_id_seq
+CREATE SEQUENCE factory.known_rules_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -958,17 +1287,17 @@ CREATE SEQUENCE public.known_rules_id_seq
 
 
 --
--- Name: known_rules_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: known_rules_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.known_rules_id_seq OWNED BY public.known_rules.id;
+ALTER SEQUENCE factory.known_rules_id_seq OWNED BY factory.known_rules.id;
 
 
 --
--- Name: mcp_registry; Type: TABLE; Schema: public; Owner: -
+-- Name: mcp_registry; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.mcp_registry (
+CREATE TABLE factory.mcp_registry (
     id integer NOT NULL,
     connector_id text NOT NULL,
     display_name text NOT NULL,
@@ -991,22 +1320,27 @@ CREATE TABLE public.mcp_registry (
     criticality text DEFAULT 'standard'::text NOT NULL,
     fallback_behavior text,
     platform_availability text[] DEFAULT ARRAY['cowork'::text] NOT NULL,
+    tool_prefix text,
+    tool_count integer,
+    schema_hash text,
+    last_audited_at timestamp with time zone,
+    tools_json jsonb,
     CONSTRAINT mcp_registry_criticality_check CHECK ((criticality = ANY (ARRAY['critical'::text, 'standard'::text, 'enhancement'::text])))
 );
 
 
 --
--- Name: TABLE mcp_registry; Type: COMMENT; Schema: public; Owner: -
+-- Name: TABLE mcp_registry; Type: COMMENT; Schema: factory; Owner: -
 --
 
-COMMENT ON TABLE public.mcp_registry IS 'Server connections — MCP connectors available to this factory. is_blocked=true means agents must never use this connector.';
+COMMENT ON TABLE factory.mcp_registry IS 'Server connections — MCP connectors available to this factory. is_blocked=true means agents must never use this connector.';
 
 
 --
--- Name: mcp_registry_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: mcp_registry_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.mcp_registry_id_seq
+CREATE SEQUENCE factory.mcp_registry_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -1016,17 +1350,17 @@ CREATE SEQUENCE public.mcp_registry_id_seq
 
 
 --
--- Name: mcp_registry_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: mcp_registry_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.mcp_registry_id_seq OWNED BY public.mcp_registry.id;
+ALTER SEQUENCE factory.mcp_registry_id_seq OWNED BY factory.mcp_registry.id;
 
 
 --
--- Name: rimmer_runs; Type: TABLE; Schema: public; Owner: -
+-- Name: rimmer_runs; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.rimmer_runs (
+CREATE TABLE factory.rimmer_runs (
     id integer NOT NULL,
     run_date timestamp with time zone DEFAULT now() NOT NULL,
     model_tested text NOT NULL,
@@ -1062,7 +1396,7 @@ CREATE VIEW public.v_hud_agent_status AS
             rimmer_runs.factory_tenant,
             rimmer_runs.run_date,
             rimmer_runs.notes
-           FROM public.rimmer_runs
+           FROM factory.rimmer_runs
           WHERE (rimmer_runs.factory_tenant = 'omatic'::text)
         ), l1 AS (
          SELECT DISTINCT ON (normalized.agent) normalized.agent,
@@ -1100,10 +1434,10 @@ CREATE VIEW public.v_hud_agent_status AS
 
 
 --
--- Name: mv_agent_eval_status; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+-- Name: mv_agent_eval_status; Type: MATERIALIZED VIEW; Schema: factory; Owner: -
 --
 
-CREATE MATERIALIZED VIEW public.mv_agent_eval_status AS
+CREATE MATERIALIZED VIEW factory.mv_agent_eval_status AS
  SELECT agent_name,
     l1_score,
     l1_pass,
@@ -1117,10 +1451,10 @@ CREATE MATERIALIZED VIEW public.mv_agent_eval_status AS
 
 
 --
--- Name: tasks; Type: TABLE; Schema: public; Owner: -
+-- Name: tasks; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.tasks (
+CREATE TABLE factory.tasks (
     id integer NOT NULL,
     category character varying(50),
     description text,
@@ -1143,63 +1477,63 @@ CREATE TABLE public.tasks (
 
 CREATE VIEW public.v_dashboard AS
  SELECT ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE ((tasks.status)::text = 'open'::text)) AS open_tasks,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND (tasks.priority = 1))) AS critical,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND (tasks.priority = 2))) AS high,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND (tasks.priority = 3))) AS normal,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND (tasks.priority = 4))) AS low,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND ((tasks.category)::text = 'SITE'::text))) AS site_tasks,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND ((tasks.category)::text = 'BUILD'::text))) AS build_tasks,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND ((tasks.category)::text = 'CONTENT'::text))) AS content_tasks,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND ((tasks.category)::text = 'INFRA'::text))) AS infra_tasks,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND ((tasks.category)::text = 'OPS'::text))) AS ops_tasks,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE (((tasks.status)::text = 'open'::text) AND ((tasks.category)::text = 'GATE'::text))) AS gate_tasks,
     ( SELECT count(*) AS count
-           FROM public.agent_state
+           FROM factory.agent_state
           WHERE ((agent_state.status)::text = 'active'::text)) AS active_agents,
     ( SELECT count(*) AS count
-           FROM public.agent_state
+           FROM factory.agent_state
           WHERE ((agent_state.status)::text = 'standalone'::text)) AS standalone_agents,
     ( SELECT factory_sessions.session_date
-           FROM public.factory_sessions
+           FROM factory.factory_sessions
           ORDER BY factory_sessions.session_date DESC
          LIMIT 1) AS last_session_date,
     ( SELECT factory_sessions.platform
-           FROM public.factory_sessions
+           FROM factory.factory_sessions
           ORDER BY factory_sessions.session_date DESC
          LIMIT 1) AS last_platform,
     ( SELECT factory_sessions.resume_notes
-           FROM public.factory_sessions
+           FROM factory.factory_sessions
           ORDER BY factory_sessions.session_date DESC
          LIMIT 1) AS resume_notes;
 
 
 --
--- Name: mv_dashboard; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+-- Name: mv_dashboard; Type: MATERIALIZED VIEW; Schema: factory; Owner: -
 --
 
-CREATE MATERIALIZED VIEW public.mv_dashboard AS
+CREATE MATERIALIZED VIEW factory.mv_dashboard AS
  SELECT open_tasks,
     critical,
     high,
@@ -1221,27 +1555,6 @@ CREATE MATERIALIZED VIEW public.mv_dashboard AS
 
 
 --
--- Name: semantic_index; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.semantic_index (
-    id bigint NOT NULL,
-    tenant_id text DEFAULT 'omatic'::text NOT NULL,
-    source_table text NOT NULL,
-    source_id text NOT NULL,
-    entity_type text NOT NULL,
-    summary_text text NOT NULL,
-    embedding public.vector(1536),
-    model_version text,
-    embedded_at timestamp with time zone,
-    embedding_stale boolean DEFAULT false NOT NULL,
-    tsv tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, COALESCE(summary_text, ''::text))) STORED,
-    authority_tier text DEFAULT 'operational'::text,
-    CONSTRAINT chk_authority_tier CHECK ((authority_tier = ANY (ARRAY['sacred'::text, 'canon'::text, 'operational'::text, 'experimental'::text, 'archived'::text, 'deprecated'::text])))
-);
-
-
---
 -- Name: v_embedding_health; Type: VIEW; Schema: public; Owner: -
 --
 
@@ -1255,7 +1568,7 @@ CREATE VIEW public.v_embedding_health AS
     count(DISTINCT semantic_index.model_version) FILTER (WHERE (semantic_index.model_version IS NOT NULL)) AS distinct_models,
     min(semantic_index.embedded_at) AS oldest_embed,
     max(semantic_index.embedded_at) AS newest_embed
-   FROM public.semantic_index
+   FROM brain.semantic_index
   GROUP BY semantic_index.tenant_id
 UNION ALL
  SELECT 'document_chunks'::text AS tier,
@@ -1267,15 +1580,15 @@ UNION ALL
     count(DISTINCT document_chunks.model_version) FILTER (WHERE (document_chunks.model_version IS NOT NULL)) AS distinct_models,
     min(document_chunks.embedded_at) AS oldest_embed,
     max(document_chunks.embedded_at) AS newest_embed
-   FROM public.document_chunks
+   FROM brain.document_chunks
   GROUP BY document_chunks.tenant_id;
 
 
 --
--- Name: mv_embedding_health; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+-- Name: mv_embedding_health; Type: MATERIALIZED VIEW; Schema: factory; Owner: -
 --
 
-CREATE MATERIALIZED VIEW public.mv_embedding_health AS
+CREATE MATERIALIZED VIEW factory.mv_embedding_health AS
  SELECT tier,
     tenant_id,
     total_rows,
@@ -1290,37 +1603,10 @@ CREATE MATERIALIZED VIEW public.mv_embedding_health AS
 
 
 --
--- Name: project_knowledge; Type: TABLE; Schema: public; Owner: -
+-- Name: sop_registry; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.project_knowledge (
-    id integer NOT NULL,
-    knowledge_type text NOT NULL,
-    title text NOT NULL,
-    detail text NOT NULL,
-    tags text[],
-    source text,
-    tenant_id text DEFAULT 'omatic'::text NOT NULL,
-    is_active boolean DEFAULT true,
-    notes text,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT chk_knowledge_type CHECK ((knowledge_type = ANY (ARRAY['framework'::text, 'project-context'::text, 'design-standard'::text, 'operator-context'::text, 'product'::text, 'architecture'::text, 'process'::text])))
-);
-
-
---
--- Name: TABLE project_knowledge; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.project_knowledge IS 'Contextual knowledge that does not fit SOPs, rules, or config. Queryable by knowledge_type. Replaces factory_memory pattern.';
-
-
---
--- Name: sop_registry; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.sop_registry (
+CREATE TABLE factory.sop_registry (
     sop_id text NOT NULL,
     title text NOT NULL,
     version text,
@@ -1335,15 +1621,17 @@ CREATE TABLE public.sop_registry (
     notes text,
     tenant_id text DEFAULT 'omatic'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    domain text,
+    CONSTRAINT sop_registry_domain_check CHECK ((domain = ANY (ARRAY['governance'::text, 'orchestration'::text, 'operations'::text, 'brand'::text, 'product-agents'::text, 'infrastructure'::text])))
 );
 
 
 --
--- Name: sop_steps; Type: TABLE; Schema: public; Owner: -
+-- Name: sop_steps; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.sop_steps (
+CREATE TABLE factory.sop_steps (
     id integer NOT NULL,
     sop_id text NOT NULL,
     step_number integer NOT NULL,
@@ -1363,81 +1651,53 @@ CREATE TABLE public.sop_steps (
 
 CREATE VIEW public.v_factory_kernel_health AS
  SELECT 'Factory Pro v3.1'::text AS standard,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'factory_config'::name)))) AS server_config,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'known_rules'::name)))) AS governance_rules,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'sop_registry'::name)))) AS sop_registry,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'sop_steps'::name)))) AS sop_steps,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'mcp_registry'::name)))) AS server_connections,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'session_log'::name)))) AS session_log,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'brand_messaging'::name)))) AS brand_messaging,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'project_knowledge'::name)))) AS project_knowledge,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'agent_state'::name)))) AS agent_registry,
-    (EXISTS ( SELECT 1
-           FROM information_schema.tables
-          WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'factory_agreements'::name)))) AS agent_agreements,
+    (to_regclass('factory.factory_config'::text) IS NOT NULL) AS server_config,
+    (to_regclass('factory.known_rules'::text) IS NOT NULL) AS governance_rules,
+    (to_regclass('factory.sop_registry'::text) IS NOT NULL) AS sop_registry,
+    (to_regclass('factory.sop_steps'::text) IS NOT NULL) AS sop_steps,
+    (to_regclass('factory.mcp_registry'::text) IS NOT NULL) AS server_connections,
+    (to_regclass('factory.session_log'::text) IS NOT NULL) AS session_log,
+    (to_regclass('brand.brand_messaging'::text) IS NOT NULL) AS brand_messaging,
+    (to_regclass('brain.project_knowledge'::text) IS NOT NULL) AS project_knowledge,
+    (to_regclass('factory.agent_state'::text) IS NOT NULL) AS agent_registry,
+    (to_regclass('factory.factory_agreements'::text) IS NOT NULL) AS agent_agreements,
     ( SELECT count(*) AS count
-           FROM public.sop_registry
+           FROM factory.sop_registry
           WHERE ((sop_registry.tenant_id = 'omatic'::text) AND (sop_registry.status = 'active'::text))) AS active_sops,
     ( SELECT count(*) AS count
-           FROM public.sop_steps) AS sop_steps_total,
+           FROM factory.sop_steps) AS sop_steps_total,
     ( SELECT count(*) AS count
-           FROM public.mcp_registry
+           FROM factory.mcp_registry
           WHERE ((mcp_registry.tenant_id = 'omatic'::text) AND (mcp_registry.active = true))) AS active_connections,
     ( SELECT count(*) AS count
-           FROM public.mcp_registry
+           FROM factory.mcp_registry
           WHERE ((mcp_registry.tenant_id = 'omatic'::text) AND (mcp_registry.is_blocked = true))) AS blocked_connections,
     ( SELECT count(*) AS count
-           FROM public.known_rules
+           FROM factory.known_rules
           WHERE (known_rules.tenant_id = 'omatic'::text)) AS governance_rule_count,
     ( SELECT count(*) AS count
-           FROM public.factory_agreements
+           FROM factory.factory_agreements
           WHERE (factory_agreements.tenant_id = 'omatic'::text)) AS agent_agreement_count,
     ( SELECT count(*) AS count
-           FROM public.brand_messaging
+           FROM brand.brand_messaging
           WHERE (brand_messaging.tenant_id = 'omatic'::text)) AS brand_message_count,
     ( SELECT count(*) AS count
-           FROM public.project_knowledge
+           FROM brain.project_knowledge
           WHERE ((project_knowledge.tenant_id = 'omatic'::text) AND (project_knowledge.is_active = true))) AS knowledge_item_count,
     ( SELECT count(*) AS count
-           FROM public.agent_state
+           FROM factory.agent_state
           WHERE ((agent_state.tenant_id = 'omatic'::text) AND ((agent_state.status)::text = 'active'::text))) AS active_agents,
         CASE
-            WHEN ((EXISTS ( SELECT 1
-               FROM information_schema.tables
-              WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'sop_steps'::name)))) AND (EXISTS ( SELECT 1
-               FROM information_schema.tables
-              WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'mcp_registry'::name)))) AND (EXISTS ( SELECT 1
-               FROM information_schema.tables
-              WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'brand_messaging'::name)))) AND (EXISTS ( SELECT 1
-               FROM information_schema.tables
-              WHERE (((tables.table_schema)::name = 'public'::name) AND ((tables.table_name)::name = 'project_knowledge'::name))))) THEN 'FACTORY PRO — COMPLETE'::text
+            WHEN ((to_regclass('factory.sop_steps'::text) IS NOT NULL) AND (to_regclass('factory.mcp_registry'::text) IS NOT NULL) AND (to_regclass('brand.brand_messaging'::text) IS NOT NULL) AND (to_regclass('brain.project_knowledge'::text) IS NOT NULL)) THEN 'FACTORY PRO — COMPLETE'::text
             ELSE 'FACTORY PRO — INCOMPLETE'::text
         END AS kernel_status;
 
 
 --
--- Name: mv_factory_kernel_health; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+-- Name: mv_factory_kernel_health; Type: MATERIALIZED VIEW; Schema: factory; Owner: -
 --
 
-CREATE MATERIALIZED VIEW public.mv_factory_kernel_health AS
+CREATE MATERIALIZED VIEW factory.mv_factory_kernel_health AS
  SELECT standard,
     server_config,
     governance_rules,
@@ -1475,8 +1735,10 @@ CREATE VIEW public.v_knowledge_with_decommissioned_terms AS
     "left"(pk.detail, 200) AS detail_preview,
     array_agg(dt.term ORDER BY dt.term) AS matched_terms,
     count(*) AS hit_count
-   FROM (public.project_knowledge pk
-     JOIN public.decommissioned_terms dt ON (((pk.tenant_id = dt.tenant_id) AND ((pk.detail ~~* (('%'::text || dt.term) || '%'::text)) OR (pk.title ~~* (('%'::text || dt.term) || '%'::text))))))
+   FROM (brain.project_knowledge pk
+     JOIN factory.decommissioned_terms dt ON (((pk.tenant_id = dt.tenant_id) AND ((pk.detail ~~* (('%'::text || dt.term) || '%'::text)) OR (pk.title ~~* (('%'::text || dt.term) || '%'::text))) AND (NOT (EXISTS ( SELECT 1
+           FROM factory.decommissioned_term_allowlist a
+          WHERE ((a.tenant_id = pk.tenant_id) AND (a.source_table = 'project_knowledge'::text) AND (a.source_id = (pk.id)::text) AND (a.term = dt.term))))))))
   GROUP BY pk.id, pk.tenant_id, pk.knowledge_type, pk.title, pk.detail;
 
 
@@ -1491,8 +1753,10 @@ CREATE VIEW public.v_rules_with_decommissioned_terms AS
     "left"(kr.rule, 200) AS rule_preview,
     array_agg(dt.term ORDER BY dt.term) AS matched_terms,
     count(*) AS hit_count
-   FROM (public.known_rules kr
-     JOIN public.decommissioned_terms dt ON (((kr.tenant_id = dt.tenant_id) AND (kr.rule ~~* (('%'::text || dt.term) || '%'::text)))))
+   FROM (factory.known_rules kr
+     JOIN factory.decommissioned_terms dt ON (((kr.tenant_id = dt.tenant_id) AND (kr.rule ~~* (('%'::text || dt.term) || '%'::text)) AND (NOT (EXISTS ( SELECT 1
+           FROM factory.decommissioned_term_allowlist a
+          WHERE ((a.tenant_id = kr.tenant_id) AND (a.source_table = 'known_rules'::text) AND (a.source_id = (kr.id)::text) AND (a.term = dt.term))))))))
   GROUP BY kr.id, kr.tenant_id, kr.category, kr.rule;
 
 
@@ -1507,8 +1771,10 @@ CREATE VIEW public.v_sops_with_decommissioned_terms AS
     "left"(COALESCE(sr.summary, sr.full_body), 200) AS preview,
     array_agg(dt.term ORDER BY dt.term) AS matched_terms,
     count(*) AS hit_count
-   FROM (public.sop_registry sr
-     JOIN public.decommissioned_terms dt ON (((sr.tenant_id = dt.tenant_id) AND ((sr.title ~~* (('%'::text || dt.term) || '%'::text)) OR (sr.summary ~~* (('%'::text || dt.term) || '%'::text)) OR (sr.full_body ~~* (('%'::text || dt.term) || '%'::text))))))
+   FROM (factory.sop_registry sr
+     JOIN factory.decommissioned_terms dt ON (((sr.tenant_id = dt.tenant_id) AND ((sr.title ~~* (('%'::text || dt.term) || '%'::text)) OR (sr.summary ~~* (('%'::text || dt.term) || '%'::text)) OR (sr.full_body ~~* (('%'::text || dt.term) || '%'::text))) AND (NOT (EXISTS ( SELECT 1
+           FROM factory.decommissioned_term_allowlist a
+          WHERE ((a.tenant_id = sr.tenant_id) AND (a.source_table = 'sop_registry'::text) AND (a.source_id = sr.sop_id) AND (a.term = dt.term))))))))
   WHERE (sr.status <> ALL (ARRAY['tombstoned'::text, 'deprecated'::text]))
   GROUP BY sr.sop_id, sr.tenant_id, sr.title, sr.summary, sr.full_body;
 
@@ -1526,18 +1792,18 @@ CREATE VIEW public.v_startup_summary AS
     ( SELECT jsonb_object_agg(t.category, t.cnt) AS jsonb_object_agg
            FROM ( SELECT tasks.category,
                     count(*) AS cnt
-                   FROM public.tasks
+                   FROM factory.tasks
                   WHERE ((tasks.status)::text = 'open'::text)
                   GROUP BY tasks.category
                   ORDER BY tasks.category) t) AS open_tasks,
     ( SELECT count(*) AS count
-           FROM public.tasks
+           FROM factory.tasks
           WHERE ((tasks.status)::text = 'open'::text)) AS open_task_total,
     ( SELECT jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'category', p.category, 'owner', p.owner) ORDER BY p.category, p.id) AS jsonb_agg
-           FROM public.tasks p
+           FROM factory.tasks p
           WHERE (((p.status)::text = 'open'::text) AND (p.priority = 1))) AS p1_tasks,
     ( SELECT jsonb_agg(jsonb_build_object('name', agent_state.agent_name, 'version', agent_state.version, 'sig', agent_state.state_sig, 'status', agent_state.status) ORDER BY agent_state.status, agent_state.agent_name) AS jsonb_agg
-           FROM public.agent_state) AS agents,
+           FROM factory.agent_state) AS agents,
     ( SELECT jsonb_object_agg(h.tier, jsonb_build_object('total', h.total_rows, 'embedded', h.embedded, 'stale', h.stale, 'unembedded', h.unembedded)) AS jsonb_object_agg
            FROM public.v_embedding_health h
           WHERE (h.tenant_id = 'omatic'::text)) AS embedding_health,
@@ -1549,36 +1815,36 @@ CREATE VIEW public.v_startup_summary AS
            FROM public.v_sops_with_decommissioned_terms
           WHERE (v_sops_with_decommissioned_terms.tenant_id = 'omatic'::text))) AS decommissioned_terms,
     ( SELECT COALESCE(jsonb_agg(jsonb_build_object('sop_id', sr.sop_id, 'title', sr.title, 'summary', sr.summary, 'trigger_phrases', sr.trigger_phrases) ORDER BY sr.sop_id), '[]'::jsonb) AS "coalesce"
-           FROM public.sop_registry sr
+           FROM factory.sop_registry sr
           WHERE ((sr.tenant_id = 'omatic'::text) AND (sr.status = 'active'::text))) AS sop_index,
     jsonb_build_object('active_rule_count', ( SELECT count(*) AS count
-           FROM public.known_rules
-          WHERE (known_rules.tenant_id = 'omatic'::text)), 'rule_count_target', 18, 'combined_governance_target', 25, 'rule_type_sop_count', ( SELECT count(*) AS count
-           FROM public.known_rules
+           FROM factory.known_rules
+          WHERE (known_rules.tenant_id = 'omatic'::text)), 'rule_count_target', 21, 'combined_governance_target', 28, 'rule_type_sop_count', ( SELECT count(*) AS count
+           FROM factory.known_rules
           WHERE ((known_rules.tenant_id = 'omatic'::text) AND (known_rules.rule_type = 'sop'::text))), 'agreement_required_sop_count', ( SELECT count(*) AS count
-           FROM public.factory_agreements
+           FROM factory.factory_agreements
           WHERE ((factory_agreements.tenant_id = 'omatic'::text) AND ('sop'::text = ANY (factory_agreements.required_rule_types)))), 'active_sop_count', ( SELECT count(*) AS count
-           FROM public.sop_registry
+           FROM factory.sop_registry
           WHERE ((sop_registry.tenant_id = 'omatic'::text) AND (sop_registry.status = 'active'::text))), 'missing_sop_trigger_count', ( SELECT count(*) AS count
-           FROM public.sop_registry
+           FROM factory.sop_registry
           WHERE ((sop_registry.tenant_id = 'omatic'::text) AND (sop_registry.status = 'active'::text) AND ((sop_registry.trigger_phrases IS NULL) OR (cardinality(sop_registry.trigger_phrases) = 0)))), 'dead_sop_reference_count', ( SELECT count(*) AS count
            FROM (( SELECT kr.id AS rule_id,
                     m.m[1] AS sop_ref
-                   FROM (public.known_rules kr
+                   FROM (factory.known_rules kr
                      CROSS JOIN LATERAL regexp_matches(kr.rule, '(SOP-[0-9]+)'::text, 'g'::text) m(m))
                   WHERE (kr.tenant_id = 'omatic'::text)) refs
-             LEFT JOIN public.sop_registry sr ON (((sr.tenant_id = 'omatic'::text) AND ((sr.sop_id = refs.sop_ref) OR (sr.title ~~* (('%'::text || refs.sop_ref) || '%'::text))))))
+             LEFT JOIN factory.sop_registry sr ON (((sr.tenant_id = 'omatic'::text) AND ((sr.sop_id = refs.sop_ref) OR (sr.title ~~* (('%'::text || refs.sop_ref) || '%'::text))))))
           WHERE ((sr.sop_id IS NULL) OR (sr.status <> 'active'::text)))) AS governance_health
-   FROM public.factory_sessions fs
+   FROM factory.factory_sessions fs
   WHERE (id = ( SELECT max(factory_sessions.id) AS max
-           FROM public.factory_sessions));
+           FROM factory.factory_sessions));
 
 
 --
--- Name: mv_startup_snapshot; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+-- Name: mv_startup_snapshot; Type: MATERIALIZED VIEW; Schema: factory; Owner: -
 --
 
-CREATE MATERIALIZED VIEW public.mv_startup_snapshot AS
+CREATE MATERIALIZED VIEW factory.mv_startup_snapshot AS
  SELECT last_session_id,
     session_date,
     platform,
@@ -1595,10 +1861,575 @@ CREATE MATERIALIZED VIEW public.mv_startup_snapshot AS
 
 
 --
--- Name: process_changelog; Type: TABLE; Schema: public; Owner: -
+-- Name: persona; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.process_changelog (
+CREATE TABLE factory.persona (
+    agent_name character varying NOT NULL,
+    callsign character varying NOT NULL,
+    factory_type character varying NOT NULL,
+    status character varying DEFAULT 'active'::character varying NOT NULL,
+    current_version integer,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: persona_archetype; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_archetype (
+    id integer NOT NULL,
+    version_id integer NOT NULL,
+    layer character varying NOT NULL,
+    archetype_name character varying NOT NULL,
+    description text,
+    sort_order integer DEFAULT 0 NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT persona_archetype_layer_check CHECK (((layer)::text = ANY ((ARRAY['primary'::character varying, 'character_flavor'::character varying, 'operational_mode'::character varying, 'crisis_mode'::character varying, 'deep_function'::character varying, 'ethic'::character varying])::text[])))
+);
+
+
+--
+-- Name: persona_archetype_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_archetype_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_archetype_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_archetype_id_seq OWNED BY factory.persona_archetype.id;
+
+
+--
+-- Name: persona_asset; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_asset (
+    id integer NOT NULL,
+    agent_name character varying NOT NULL,
+    asset_type character varying NOT NULL,
+    variant character varying,
+    path text NOT NULL,
+    format character varying,
+    is_primary boolean DEFAULT false NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT persona_asset_asset_type_check CHECK (((asset_type)::text = ANY ((ARRAY['thumbnail'::character varying, 'badge'::character varying, 'icon'::character varying, 'full_body'::character varying, 'wordmark'::character varying])::text[])))
+);
+
+
+--
+-- Name: persona_asset_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_asset_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_asset_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_asset_id_seq OWNED BY factory.persona_asset.id;
+
+
+--
+-- Name: persona_build; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_build (
+    id integer NOT NULL,
+    agent_name character varying NOT NULL,
+    persona_version integer NOT NULL,
+    identity_signature text NOT NULL,
+    identity_version integer,
+    template_id character varying,
+    template_version character varying,
+    target_type character varying NOT NULL,
+    target_factory text,
+    output_checksum text,
+    output_bytes integer,
+    reason text,
+    built_by character varying,
+    built_at timestamp with time zone DEFAULT now() NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    CONSTRAINT persona_build_target_type_check CHECK (((target_type)::text = ANY ((ARRAY['l1_skill'::character varying, 'plugin_skill'::character varying, 'gpt'::character varying, 'l2_agent'::character varying, 'roster_card'::character varying, 'voice_avatar'::character varying])::text[])))
+);
+
+
+--
+-- Name: TABLE persona_build; Type: COMMENT; Schema: factory; Owner: -
+--
+
+COMMENT ON TABLE factory.persona_build IS 'Append-only build lockfile. One row per render. Never UPDATE/DELETE.';
+
+
+--
+-- Name: persona_build_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_build_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_build_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_build_id_seq OWNED BY factory.persona_build.id;
+
+
+--
+-- Name: persona_character_bible; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_character_bible (
+    id integer NOT NULL,
+    version_id integer NOT NULL,
+    backstory text,
+    personality text,
+    traits text[] DEFAULT '{}'::text[] NOT NULL,
+    character_depth text,
+    evolution_history text,
+    emoji character varying,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    archetype text,
+    humor text,
+    seriousness_boundary text
+);
+
+
+--
+-- Name: persona_character_bible_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_character_bible_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_character_bible_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_character_bible_id_seq OWNED BY factory.persona_character_bible.id;
+
+
+--
+-- Name: persona_character_dimension; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_character_dimension (
+    id integer NOT NULL,
+    version_id integer NOT NULL,
+    dimension character varying NOT NULL,
+    content text NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: persona_character_dimension_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_character_dimension_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_character_dimension_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_character_dimension_id_seq OWNED BY factory.persona_character_dimension.id;
+
+
+--
+-- Name: persona_drift_check; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_drift_check (
+    id integer NOT NULL,
+    agent_name character varying NOT NULL,
+    version_id integer,
+    export_target_id integer,
+    check_type character varying,
+    result character varying DEFAULT 'untested'::character varying NOT NULL,
+    drift_score numeric,
+    detail text,
+    checked_by character varying,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT persona_drift_check_result_check CHECK (((result)::text = ANY ((ARRAY['pass'::character varying, 'warn'::character varying, 'fail'::character varying, 'untested'::character varying])::text[])))
+);
+
+
+--
+-- Name: persona_drift_check_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_drift_check_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_drift_check_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_drift_check_id_seq OWNED BY factory.persona_drift_check.id;
+
+
+--
+-- Name: persona_eval_criteria; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_eval_criteria (
+    id integer NOT NULL,
+    agent_name character varying NOT NULL,
+    criterion character varying NOT NULL,
+    assertion text NOT NULL,
+    severity character varying DEFAULT 'blocker'::character varying NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT persona_eval_criteria_severity_check CHECK (((severity)::text = ANY ((ARRAY['blocker'::character varying, 'warn'::character varying])::text[])))
+);
+
+
+--
+-- Name: persona_eval_criteria_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_eval_criteria_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_eval_criteria_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_eval_criteria_id_seq OWNED BY factory.persona_eval_criteria.id;
+
+
+--
+-- Name: persona_export_target; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_export_target (
+    id integer NOT NULL,
+    agent_name character varying NOT NULL,
+    target_type character varying NOT NULL,
+    status character varying DEFAULT 'pending'::character varying NOT NULL,
+    generated_from_version integer,
+    artifact_path text,
+    checksum text,
+    last_export_at timestamp with time zone,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT persona_export_target_status_check CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'generated'::character varying, 'published'::character varying, 'stale'::character varying, 'retired'::character varying])::text[]))),
+    CONSTRAINT persona_export_target_target_type_check CHECK (((target_type)::text = ANY ((ARRAY['l1_skill'::character varying, 'plugin_skill'::character varying, 'gpt'::character varying, 'l2_agent'::character varying, 'roster_card'::character varying, 'voice_avatar'::character varying])::text[])))
+);
+
+
+--
+-- Name: persona_export_target_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_export_target_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_export_target_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_export_target_id_seq OWNED BY factory.persona_export_target.id;
+
+
+--
+-- Name: persona_lane_contract; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_lane_contract (
+    id integer NOT NULL,
+    version_id integer NOT NULL,
+    primary_domain text,
+    does text[] DEFAULT '{}'::text[] NOT NULL,
+    does_not text[] DEFAULT '{}'::text[] NOT NULL,
+    handoffs jsonb DEFAULT '{}'::jsonb NOT NULL,
+    suppression_rules text,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: persona_lane_contract_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_lane_contract_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_lane_contract_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_lane_contract_id_seq OWNED BY factory.persona_lane_contract.id;
+
+
+--
+-- Name: persona_provenance; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_provenance (
+    id integer NOT NULL,
+    agent_name character varying NOT NULL,
+    version_id integer,
+    source_type character varying,
+    source_path text,
+    derived_from text,
+    migration_note text,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: persona_provenance_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_provenance_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_provenance_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_provenance_id_seq OWNED BY factory.persona_provenance.id;
+
+
+--
+-- Name: persona_strength; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_strength (
+    id integer NOT NULL,
+    version_id integer NOT NULL,
+    strength character varying NOT NULL,
+    description text,
+    sort_order integer DEFAULT 0 NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: persona_strength_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_strength_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_strength_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_strength_id_seq OWNED BY factory.persona_strength.id;
+
+
+--
+-- Name: persona_tool; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_tool (
+    id integer NOT NULL,
+    version_id integer NOT NULL,
+    tool_name character varying NOT NULL,
+    purpose text,
+    category character varying,
+    sort_order integer DEFAULT 0 NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    platform text[] DEFAULT '{all}'::text[] NOT NULL
+);
+
+
+--
+-- Name: persona_tool_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_tool_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_tool_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_tool_id_seq OWNED BY factory.persona_tool.id;
+
+
+--
+-- Name: persona_version; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_version (
+    id integer NOT NULL,
+    agent_name character varying NOT NULL,
+    version integer NOT NULL,
+    review_status character varying DEFAULT 'draft'::character varying NOT NULL,
+    role character varying,
+    one_liner text,
+    summary text,
+    made_by character varying,
+    source_skill_version character varying,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    trigger_phrases text[] DEFAULT '{}'::text[] NOT NULL,
+    identity_signature text,
+    identity_version integer,
+    CONSTRAINT persona_version_review_status_check CHECK (((review_status)::text = ANY ((ARRAY['draft'::character varying, 'in_review'::character varying, 'approved'::character varying, 'published'::character varying, 'superseded'::character varying])::text[])))
+);
+
+
+--
+-- Name: persona_version_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_version_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_version_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_version_id_seq OWNED BY factory.persona_version.id;
+
+
+--
+-- Name: persona_voice_contract; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.persona_voice_contract (
+    id integer NOT NULL,
+    version_id integer NOT NULL,
+    opening_convention text,
+    register text,
+    voice_anchors text[] DEFAULT '{}'::text[] NOT NULL,
+    forbidden_phrasings text[] DEFAULT '{}'::text[] NOT NULL,
+    sample_lines text[] DEFAULT '{}'::text[] NOT NULL,
+    emoji_policy text,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    voice_texture text
+);
+
+
+--
+-- Name: persona_voice_contract_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.persona_voice_contract_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persona_voice_contract_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.persona_voice_contract_id_seq OWNED BY factory.persona_voice_contract.id;
+
+
+--
+-- Name: process_changelog; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.process_changelog (
     id bigint NOT NULL,
     tenant_id text DEFAULT 'omatic'::text NOT NULL,
     changed_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1610,10 +2441,10 @@ CREATE TABLE public.process_changelog (
 
 
 --
--- Name: process_changelog_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: process_changelog_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.process_changelog_id_seq
+CREATE SEQUENCE factory.process_changelog_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -1622,77 +2453,17 @@ CREATE SEQUENCE public.process_changelog_id_seq
 
 
 --
--- Name: process_changelog_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: process_changelog_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.process_changelog_id_seq OWNED BY public.process_changelog.id;
-
-
---
--- Name: project_knowledge_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.project_knowledge_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
+ALTER SEQUENCE factory.process_changelog_id_seq OWNED BY factory.process_changelog.id;
 
 
 --
--- Name: project_knowledge_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: retrieval_eval_cases; Type: TABLE; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.project_knowledge_id_seq OWNED BY public.project_knowledge.id;
-
-
---
--- Name: research; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.research (
-    id integer NOT NULL,
-    topic text NOT NULL,
-    summary text NOT NULL,
-    sources jsonb DEFAULT '[]'::jsonb,
-    tags text[] DEFAULT '{}'::text[],
-    collected_by text DEFAULT 'probot'::text NOT NULL,
-    session_id integer,
-    status text DEFAULT 'active'::text NOT NULL,
-    superseded_by integer,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT research_status_check CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text, 'superseded'::text])))
-);
-
-
---
--- Name: research_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.research_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: research_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.research_id_seq OWNED BY public.research.id;
-
-
---
--- Name: retrieval_eval_cases; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.retrieval_eval_cases (
+CREATE TABLE factory.retrieval_eval_cases (
     case_id text NOT NULL,
     tenant_id text DEFAULT 'omatic'::text NOT NULL,
     query_text text NOT NULL,
@@ -1708,10 +2479,10 @@ CREATE TABLE public.retrieval_eval_cases (
 
 
 --
--- Name: retrieval_eval_results; Type: TABLE; Schema: public; Owner: -
+-- Name: retrieval_eval_results; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.retrieval_eval_results (
+CREATE TABLE factory.retrieval_eval_results (
     result_id bigint NOT NULL,
     run_id bigint NOT NULL,
     case_id text NOT NULL,
@@ -1729,10 +2500,10 @@ CREATE TABLE public.retrieval_eval_results (
 
 
 --
--- Name: retrieval_eval_results_result_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: retrieval_eval_results_result_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.retrieval_eval_results_result_id_seq
+CREATE SEQUENCE factory.retrieval_eval_results_result_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -1741,17 +2512,17 @@ CREATE SEQUENCE public.retrieval_eval_results_result_id_seq
 
 
 --
--- Name: retrieval_eval_results_result_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: retrieval_eval_results_result_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.retrieval_eval_results_result_id_seq OWNED BY public.retrieval_eval_results.result_id;
+ALTER SEQUENCE factory.retrieval_eval_results_result_id_seq OWNED BY factory.retrieval_eval_results.result_id;
 
 
 --
--- Name: retrieval_eval_runs; Type: TABLE; Schema: public; Owner: -
+-- Name: retrieval_eval_runs; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.retrieval_eval_runs (
+CREATE TABLE factory.retrieval_eval_runs (
     run_id bigint NOT NULL,
     tenant_id text DEFAULT 'omatic'::text NOT NULL,
     run_label text,
@@ -1765,10 +2536,10 @@ CREATE TABLE public.retrieval_eval_runs (
 
 
 --
--- Name: retrieval_eval_runs_run_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: retrieval_eval_runs_run_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.retrieval_eval_runs_run_id_seq
+CREATE SEQUENCE factory.retrieval_eval_runs_run_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -1777,17 +2548,17 @@ CREATE SEQUENCE public.retrieval_eval_runs_run_id_seq
 
 
 --
--- Name: retrieval_eval_runs_run_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: retrieval_eval_runs_run_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.retrieval_eval_runs_run_id_seq OWNED BY public.retrieval_eval_runs.run_id;
+ALTER SEQUENCE factory.retrieval_eval_runs_run_id_seq OWNED BY factory.retrieval_eval_runs.run_id;
 
 
 --
--- Name: retrieval_events; Type: TABLE; Schema: public; Owner: -
+-- Name: retrieval_events; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.retrieval_events (
+CREATE TABLE factory.retrieval_events (
     id bigint NOT NULL,
     tenant_id text DEFAULT 'omatic'::text NOT NULL,
     caller text,
@@ -1803,10 +2574,10 @@ CREATE TABLE public.retrieval_events (
 
 
 --
--- Name: retrieval_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: retrieval_events_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.retrieval_events_id_seq
+CREATE SEQUENCE factory.retrieval_events_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -1815,17 +2586,17 @@ CREATE SEQUENCE public.retrieval_events_id_seq
 
 
 --
--- Name: retrieval_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: retrieval_events_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.retrieval_events_id_seq OWNED BY public.retrieval_events.id;
+ALTER SEQUENCE factory.retrieval_events_id_seq OWNED BY factory.retrieval_events.id;
 
 
 --
--- Name: rimmer_runs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: rimmer_runs_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.rimmer_runs_id_seq
+CREATE SEQUENCE factory.rimmer_runs_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -1835,17 +2606,17 @@ CREATE SEQUENCE public.rimmer_runs_id_seq
 
 
 --
--- Name: rimmer_runs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: rimmer_runs_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.rimmer_runs_id_seq OWNED BY public.rimmer_runs.id;
+ALTER SEQUENCE factory.rimmer_runs_id_seq OWNED BY factory.rimmer_runs.id;
 
 
 --
--- Name: rimmer_test_suite; Type: TABLE; Schema: public; Owner: -
+-- Name: rimmer_test_suite; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.rimmer_test_suite (
+CREATE TABLE factory.rimmer_test_suite (
     id integer NOT NULL,
     agent_name text NOT NULL,
     factory_id text,
@@ -1864,10 +2635,10 @@ CREATE TABLE public.rimmer_test_suite (
 
 
 --
--- Name: rimmer_test_suite_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: rimmer_test_suite_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.rimmer_test_suite_id_seq
+CREATE SEQUENCE factory.rimmer_test_suite_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -1877,36 +2648,17 @@ CREATE SEQUENCE public.rimmer_test_suite_id_seq
 
 
 --
--- Name: rimmer_test_suite_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: rimmer_test_suite_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.rimmer_test_suite_id_seq OWNED BY public.rimmer_test_suite.id;
-
-
---
--- Name: semantic_index_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.semantic_index_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
+ALTER SEQUENCE factory.rimmer_test_suite_id_seq OWNED BY factory.rimmer_test_suite.id;
 
 
 --
--- Name: semantic_index_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: session_log; Type: TABLE; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.semantic_index_id_seq OWNED BY public.semantic_index.id;
-
-
---
--- Name: session_log; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.session_log (
+CREATE TABLE factory.session_log (
     id integer NOT NULL,
     session_date date NOT NULL,
     session_id character varying(100),
@@ -1921,10 +2673,10 @@ CREATE TABLE public.session_log (
 
 
 --
--- Name: session_log_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: session_log_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.session_log_id_seq
+CREATE SEQUENCE factory.session_log_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -1934,17 +2686,17 @@ CREATE SEQUENCE public.session_log_id_seq
 
 
 --
--- Name: session_log_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: session_log_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.session_log_id_seq OWNED BY public.session_log.id;
+ALTER SEQUENCE factory.session_log_id_seq OWNED BY factory.session_log.id;
 
 
 --
--- Name: session_mcp_status; Type: TABLE; Schema: public; Owner: -
+-- Name: session_mcp_status; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.session_mcp_status (
+CREATE TABLE factory.session_mcp_status (
     id integer NOT NULL,
     session_id integer,
     connector_id text NOT NULL,
@@ -1959,10 +2711,10 @@ CREATE TABLE public.session_mcp_status (
 
 
 --
--- Name: session_mcp_status_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: session_mcp_status_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.session_mcp_status_id_seq
+CREATE SEQUENCE factory.session_mcp_status_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -1972,17 +2724,17 @@ CREATE SEQUENCE public.session_mcp_status_id_seq
 
 
 --
--- Name: session_mcp_status_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: session_mcp_status_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.session_mcp_status_id_seq OWNED BY public.session_mcp_status.id;
+ALTER SEQUENCE factory.session_mcp_status_id_seq OWNED BY factory.session_mcp_status.id;
 
 
 --
--- Name: sig_log; Type: TABLE; Schema: public; Owner: -
+-- Name: sig_log; Type: TABLE; Schema: factory; Owner: -
 --
 
-CREATE TABLE public.sig_log (
+CREATE TABLE factory.sig_log (
     id integer NOT NULL,
     log_date date NOT NULL,
     agent_name character varying(50),
@@ -1996,10 +2748,10 @@ CREATE TABLE public.sig_log (
 
 
 --
--- Name: sig_log_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: sig_log_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.sig_log_id_seq
+CREATE SEQUENCE factory.sig_log_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -2009,17 +2761,17 @@ CREATE SEQUENCE public.sig_log_id_seq
 
 
 --
--- Name: sig_log_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: sig_log_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.sig_log_id_seq OWNED BY public.sig_log.id;
+ALTER SEQUENCE factory.sig_log_id_seq OWNED BY factory.sig_log.id;
 
 
 --
--- Name: sop_steps_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: sop_steps_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.sop_steps_id_seq
+CREATE SEQUENCE factory.sop_steps_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -2029,17 +2781,17 @@ CREATE SEQUENCE public.sop_steps_id_seq
 
 
 --
--- Name: sop_steps_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: sop_steps_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.sop_steps_id_seq OWNED BY public.sop_steps.id;
+ALTER SEQUENCE factory.sop_steps_id_seq OWNED BY factory.sop_steps.id;
 
 
 --
--- Name: tasks_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: tasks_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
 --
 
-CREATE SEQUENCE public.tasks_id_seq
+CREATE SEQUENCE factory.tasks_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
@@ -2049,10 +2801,68 @@ CREATE SEQUENCE public.tasks_id_seq
 
 
 --
--- Name: tasks_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: tasks_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
 --
 
-ALTER SEQUENCE public.tasks_id_seq OWNED BY public.tasks.id;
+ALTER SEQUENCE factory.tasks_id_seq OWNED BY factory.tasks.id;
+
+
+--
+-- Name: work_claims; Type: TABLE; Schema: factory; Owner: -
+--
+
+CREATE TABLE factory.work_claims (
+    id integer NOT NULL,
+    tenant_id text DEFAULT 'omatic'::text NOT NULL,
+    resource_type text NOT NULL,
+    resource_id text NOT NULL,
+    claimed_by text NOT NULL,
+    session_id text,
+    claimed_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    released_at timestamp with time zone,
+    status text DEFAULT 'active'::text NOT NULL,
+    factory_id text DEFAULT 'omatic'::text NOT NULL,
+    platform text,
+    claim_note text,
+    released_by text,
+    CONSTRAINT work_claims_status_check CHECK ((status = ANY (ARRAY['active'::text, 'released'::text, 'expired'::text])))
+);
+
+
+--
+-- Name: work_claims_id_seq; Type: SEQUENCE; Schema: factory; Owner: -
+--
+
+CREATE SEQUENCE factory.work_claims_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: work_claims_id_seq; Type: SEQUENCE OWNED BY; Schema: factory; Owner: -
+--
+
+ALTER SEQUENCE factory.work_claims_id_seq OWNED BY factory.work_claims.id;
+
+
+--
+-- Name: factory_lanes; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.factory_lanes AS
+ SELECT lane,
+    tenant_id,
+    owner_agents,
+    reviewer_agent,
+    parallel_eligible,
+    exclusive_resources,
+    notes
+   FROM factory.factory_lanes;
 
 
 --
@@ -2066,9 +2876,9 @@ CREATE VIEW public.v_actionable_tasks AS
     owner,
     title,
     ref_id
-   FROM public.tasks t
+   FROM factory.tasks t
   WHERE (((status)::text = 'open'::text) AND ((blocked_by IS NULL) OR (EXISTS ( SELECT 1
-           FROM public.tasks b
+           FROM factory.tasks b
           WHERE ((b.id = t.blocked_by) AND ((b.status)::text = 'closed'::text))))))
   ORDER BY priority, category, id;
 
@@ -2085,8 +2895,8 @@ CREATE VIEW public.v_agent_agreement AS
             fa.required_rule_types,
             count(kr.id) AS loaded_rules,
             fa.tenant_id
-           FROM (public.factory_agreements fa
-             LEFT JOIN public.known_rules kr ON (((kr.tenant_id = fa.tenant_id) AND ((kr.applies_to = fa.agent_name) OR (kr.applies_to = 'all'::text) OR (kr.applies_to = 'all-agents'::text) OR (fa.agent_name = ANY (string_to_array(TRIM(BOTH '{}'::text FROM kr.applies_to), ','::text)))))))
+           FROM (factory.factory_agreements fa
+             LEFT JOIN factory.known_rules kr ON (((kr.tenant_id = fa.tenant_id) AND ((kr.applies_to = fa.agent_name) OR (kr.applies_to = 'all'::text) OR (kr.applies_to = 'all-agents'::text) OR (fa.agent_name = ANY (string_to_array(TRIM(BOTH '{}'::text FROM kr.applies_to), ','::text)))))))
           GROUP BY fa.agent_name, fa.agreement_version, fa.enforcement_model, fa.required_rule_types, fa.tenant_id
         ), agreement_missing AS (
          SELECT ab.agent_name,
@@ -2098,7 +2908,7 @@ CREATE VIEW public.v_agent_agreement AS
             ARRAY( SELECT required_type.required_type
                    FROM unnest(ab.required_rule_types) required_type(required_type)
                   WHERE (NOT (EXISTS ( SELECT 1
-                           FROM public.known_rules kr
+                           FROM factory.known_rules kr
                           WHERE ((kr.tenant_id = ab.tenant_id) AND (kr.rule_type = required_type.required_type) AND ((kr.applies_to = ab.agent_name) OR (kr.applies_to = 'all'::text) OR (kr.applies_to = 'all-agents'::text) OR (ab.agent_name = ANY (string_to_array(TRIM(BOTH '{}'::text FROM kr.applies_to), ','::text))))))))) AS missing_rule_types
            FROM agreement_base ab
         )
@@ -2129,7 +2939,7 @@ CREATE VIEW public.v_agent_roster AS
     state_sig,
     source_file,
     (updated_at)::date AS last_updated
-   FROM public.agent_state
+   FROM factory.agent_state
   ORDER BY
         CASE factory
             WHEN 'closed_factory'::text THEN 1
@@ -2151,7 +2961,7 @@ CREATE VIEW public.v_agent_rules_exploded AS
     kr.enforcement,
     kr.category,
     kr.applies_to AS original_applies_to
-   FROM (public.known_rules kr
+   FROM (factory.known_rules kr
      CROSS JOIN LATERAL ( SELECT unnest(
                 CASE
                     WHEN (kr.applies_to = ANY (ARRAY['all'::text, 'all-agents'::text])) THEN ARRAY['probot'::text, 'brandy'::text, 'carver'::text, 'monet'::text, 'fred'::text, 'data'::text, 'smith'::text, 'jake'::text, 'jo'::text, 'jay'::text, 'pixel'::text, 'tim'::text]
@@ -2167,14 +2977,14 @@ CREATE VIEW public.v_agreement_rule_coverage AS
  SELECT fa.agent_name,
     fa.agreement_version,
     rt.rule_type,
-    count(kr.id) AS rule_count,
+    count(are.id) AS rule_count,
         CASE
-            WHEN (count(kr.id) = 0) THEN 'GAP'::text
+            WHEN (count(are.id) = 0) THEN 'GAP'::text
             ELSE 'COVERED'::text
         END AS coverage_status
-   FROM ((public.factory_agreements fa
+   FROM ((factory.factory_agreements fa
      CROSS JOIN LATERAL unnest(fa.required_rule_types) rt(rule_type))
-     LEFT JOIN public.known_rules kr ON (((kr.rule_type = rt.rule_type) AND ((kr.applies_to = fa.agent_name) OR (kr.applies_to = 'all'::text)))))
+     LEFT JOIN public.v_agent_rules_exploded are ON (((are.rule_type = rt.rule_type) AND (are.agent_name = fa.agent_name) AND (are.tenant_id = fa.tenant_id))))
   GROUP BY fa.agent_name, fa.agreement_version, rt.rule_type
   ORDER BY fa.agent_name, rt.rule_type;
 
@@ -2191,8 +3001,8 @@ CREATE VIEW public.v_blocked_tasks AS
     b.id AS blocker_id,
     b.title AS blocker_title,
     b.status AS blocker_status
-   FROM (public.tasks t
-     JOIN public.tasks b ON ((t.blocked_by = b.id)))
+   FROM (factory.tasks t
+     JOIN factory.tasks b ON ((t.blocked_by = b.id)))
   WHERE ((t.status)::text = 'open'::text)
   ORDER BY t.priority, t.id;
 
@@ -2211,9 +3021,37 @@ CREATE VIEW public.v_brain_usage AS
             WHEN (count(*) FILTER (WHERE ((event_type)::text = 'brain_search'::text)) = 0) THEN 'dark'::text
             ELSE 'active'::text
         END AS brain_status
-   FROM public.session_log sl
+   FROM factory.session_log sl
   GROUP BY tenant_id, session_id
   ORDER BY session_id DESC;
+
+
+--
+-- Name: v_brand_soul; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.v_brand_soul AS
+ SELECT 'doctrine'::text AS layer,
+    document_chunks.source_name AS source,
+    document_chunks.chunk_index AS ord,
+    document_chunks.content
+   FROM brain.document_chunks
+  WHERE ((document_chunks.tenant_id = 'omatic'::text) AND (document_chunks.source_type = 'brand-doctrine'::text))
+UNION ALL
+ SELECT 'distilled'::text AS layer,
+    ((brand_messaging.category || '/'::text) || brand_messaging.sub_type) AS source,
+    brand_messaging.id AS ord,
+    brand_messaging.content
+   FROM brand.brand_messaging
+  WHERE ((brand_messaging.tenant_id = 'omatic'::text) AND ((brand_messaging.category = ANY (ARRAY['origin-story'::text, 'brand-identity'::text])) OR (brand_messaging.sub_type = ANY (ARRAY['voice-canon'::text, 'sideways-language'::text, 'human-cyber-work-teams'::text, 'closing-line'::text, 'hero-claim'::text]))))
+  ORDER BY 1, 2, 3;
+
+
+--
+-- Name: VIEW v_brand_soul; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON VIEW public.v_brand_soul IS 'The soul of O-Matic in one query. Doctrine layer = verbatim-faithful chunks of the Factory 2.0 letter and Golden Era Answers (sacred tier). Distilled layer = operational brand_messaging rows. SELECT * FROM v_brand_soul = pour it in. Verbatim masters live in brand/*.md on disk.';
 
 
 --
@@ -2230,7 +3068,7 @@ CREATE VIEW public.v_content_pipeline AS
     (file_path IS NOT NULL) AS has_file,
     (created_at)::date AS created_date,
     (published_at)::date AS published_date
-   FROM public.content_staging
+   FROM brand.content_staging
   WHERE (status <> 'archived'::text)
   ORDER BY
         CASE status
@@ -2253,7 +3091,7 @@ CREATE VIEW public.v_decisions_log AS
     decision,
     rationale,
     made_by
-   FROM public.decisions
+   FROM factory.decisions
   ORDER BY decision_date DESC, id DESC;
 
 
@@ -2269,7 +3107,7 @@ CREATE VIEW public.v_docling_registry AS
             WHEN docling_required THEN 1
             ELSE 0
         END) AS needs_conversion
-   FROM public.docling_registry
+   FROM brain.docling_registry
   GROUP BY category
   ORDER BY category;
 
@@ -2285,7 +3123,7 @@ CREATE VIEW public.v_factory_config AS
     notes,
     updated_at,
     updated_by
-   FROM public.factory_config
+   FROM factory.factory_config
   WHERE (tenant_id = 'omatic'::text)
   ORDER BY category, key;
 
@@ -2317,7 +3155,7 @@ CREATE VIEW public.v_hud_factory_coverage AS
     count(DISTINCT lower(agent_name)) FILTER (WHERE (pass = false)) AS agents_failed,
     count(DISTINCT lower(agent_name)) FILTER (WHERE (pass IS NULL)) AS agents_unscored,
     max(run_date) AS last_eval
-   FROM public.rimmer_runs
+   FROM factory.rimmer_runs
   GROUP BY factory_tenant;
 
 
@@ -2330,7 +3168,7 @@ CREATE VIEW public.v_hud_rewrite_queue AS
     score AS l1_score,
     notes AS rimmer_notes,
     run_date
-   FROM public.rimmer_runs
+   FROM factory.rimmer_runs
   WHERE ((layer = 1) AND ((pass = false) OR (pass IS NULL)) AND (factory_tenant = 'omatic'::text))
   ORDER BY score;
 
@@ -2358,9 +3196,9 @@ CREATE VIEW public.v_mcp_readiness AS
             WHEN ((r.criticality = 'standard'::text) AND (COALESCE(s.probe_result, 'untested'::text) <> 'connected'::text)) THEN 'DEGRADED'::text
             ELSE 'REDUCED'::text
         END AS status_label
-   FROM (public.mcp_registry r
-     LEFT JOIN public.session_mcp_status s ON (((s.tenant_id = r.tenant_id) AND (s.connector_id = r.connector_id) AND (s.session_id = ( SELECT max(fs.id) AS max
-           FROM public.factory_sessions fs
+   FROM (factory.mcp_registry r
+     LEFT JOIN factory.session_mcp_status s ON (((s.tenant_id = r.tenant_id) AND (s.connector_id = r.connector_id) AND (s.session_id = ( SELECT max(fs.id) AS max
+           FROM factory.factory_sessions fs
           WHERE (fs.tenant_id = r.tenant_id))))))
   WHERE ((r.active = true) AND (r.tenant_id = 'omatic'::text))
   ORDER BY
@@ -2397,9 +3235,9 @@ CREATE VIEW public.v_mcp_readiness_by_session AS
             WHEN ((r.criticality = 'standard'::text) AND (COALESCE(s.probe_result, 'untested'::text) <> 'connected'::text)) THEN 'DEGRADED'::text
             ELSE 'REDUCED'::text
         END AS status_label
-   FROM ((public.session_mcp_status s
-     JOIN public.mcp_registry r ON ((r.connector_id = s.connector_id)))
-     LEFT JOIN public.factory_sessions fs ON ((fs.id = s.session_id)))
+   FROM ((factory.session_mcp_status s
+     JOIN factory.mcp_registry r ON ((r.connector_id = s.connector_id)))
+     LEFT JOIN factory.factory_sessions fs ON ((fs.id = s.session_id)))
   WHERE (r.active = true);
 
 
@@ -2414,7 +3252,7 @@ CREATE VIEW public.v_open_site_tasks AS
     ref_id,
     title,
     description
-   FROM public.tasks t
+   FROM factory.tasks t
   WHERE (((status)::text = 'open'::text) AND ((category)::text = 'SITE'::text))
   ORDER BY priority, ref_id, id;
 
@@ -2434,8 +3272,8 @@ CREATE VIEW public.v_open_tasks AS
     t.blocked_by,
     b.title AS blocked_by_title,
     (t.created_at)::date AS added
-   FROM (public.tasks t
-     LEFT JOIN public.tasks b ON ((t.blocked_by = b.id)))
+   FROM (factory.tasks t
+     LEFT JOIN factory.tasks b ON ((t.blocked_by = b.id)))
   WHERE ((t.status)::text = 'open'::text)
   ORDER BY t.priority, t.category, t.id;
 
@@ -2451,7 +3289,7 @@ CREATE VIEW public.v_recent_sessions AS
     summary,
     resume_notes,
     agents_active
-   FROM public.factory_sessions
+   FROM factory.factory_sessions
   ORDER BY session_date DESC
  LIMIT 5;
 
@@ -2468,7 +3306,7 @@ CREATE VIEW public.v_research_active AS
     collected_by,
     session_id,
     (created_at)::date AS collected_date
-   FROM public.research
+   FROM brain.research
   WHERE (status = 'active'::text)
   ORDER BY created_at DESC;
 
@@ -2488,13 +3326,13 @@ CREATE VIEW public.v_retrieval_eval_case_summary AS
     latest.expected_found AS latest_expected_found,
     latest.first_match_rank AS latest_first_match_rank,
     latest.created_at AS latest_result_at
-   FROM (public.retrieval_eval_cases c
+   FROM (factory.retrieval_eval_cases c
      LEFT JOIN LATERAL ( SELECT r.run_id,
             r.expected_found,
             r.first_match_rank,
             r.created_at
-           FROM (public.retrieval_eval_results r
-             JOIN public.retrieval_eval_runs run ON ((run.run_id = r.run_id)))
+           FROM (factory.retrieval_eval_results r
+             JOIN factory.retrieval_eval_runs run ON ((run.run_id = r.run_id)))
           WHERE ((r.case_id = c.case_id) AND (run.tenant_id = c.tenant_id))
           ORDER BY r.created_at DESC
          LIMIT 1) latest ON (true));
@@ -2511,7 +3349,7 @@ CREATE VIEW public.v_retrieval_health AS
     count(*) FILTER (WHERE (NOT used_vector)) AS fts_only_event_count,
     round(avg(latency_ms) FILTER (WHERE (latency_ms IS NOT NULL)), 2) AS avg_latency_ms,
     max(created_at) AS last_event_at
-   FROM public.retrieval_events e
+   FROM factory.retrieval_events e
   GROUP BY tenant_id;
 
 
@@ -2526,7 +3364,7 @@ CREATE VIEW public.v_rimmer_agent_summary AS
     score,
     pass,
     (run_date)::date AS last_run
-   FROM public.rimmer_runs
+   FROM factory.rimmer_runs
   ORDER BY agent_name, run_date DESC;
 
 
@@ -2563,7 +3401,7 @@ CREATE VIEW public.v_rimmer_compliance_trend AS
             rimmer_runs.agent_version,
             rimmer_runs.agent_sig,
             row_number() OVER (PARTITION BY rimmer_runs.agent_name, rimmer_runs.factory_id ORDER BY rimmer_runs.run_date DESC) AS rn
-           FROM public.rimmer_runs) ranked
+           FROM factory.rimmer_runs) ranked
   WHERE (rn <= 10)
   ORDER BY agent_name, factory_id, ((run_date)::date) DESC;
 
@@ -2584,7 +3422,7 @@ CREATE VIEW public.v_rimmer_latest AS
     agent_version,
     agent_sig,
     (run_date)::date AS last_run
-   FROM public.rimmer_runs
+   FROM factory.rimmer_runs
   ORDER BY agent_name, factory_id, run_date DESC;
 
 
@@ -2624,7 +3462,7 @@ CREATE VIEW public.v_rimmer_drift AS
     lag(score) OVER (PARTITION BY agent_name, factory_id ORDER BY rimmer_runs.run_date) AS previous_score,
     (score - lag(score) OVER (PARTITION BY agent_name, factory_id ORDER BY rimmer_runs.run_date)) AS delta,
     (run_date)::date AS run_date
-   FROM public.rimmer_runs
+   FROM factory.rimmer_runs
   ORDER BY agent_name, factory_id, ((run_date)::date) DESC;
 
 
@@ -2639,9 +3477,9 @@ CREATE VIEW public.v_rimmer_fails_active AS
     score,
     notes,
     (run_date)::date AS run_date
-   FROM public.rimmer_runs
+   FROM factory.rimmer_runs
   WHERE ((pass = false) AND (NOT (EXISTS ( SELECT 1
-           FROM public.rimmer_runs r2
+           FROM factory.rimmer_runs r2
           WHERE ((lower(r2.agent_name) = lower(rimmer_runs.agent_name)) AND (r2.factory_tenant = rimmer_runs.factory_tenant) AND (r2.layer = rimmer_runs.layer) AND (r2.pass = true) AND (r2.run_date > rimmer_runs.run_date))))))
   ORDER BY factory_tenant, layer, score;
 
@@ -2659,7 +3497,7 @@ CREATE VIEW public.v_rimmer_history AS
     score,
     pass,
     notes
-   FROM public.rimmer_runs
+   FROM factory.rimmer_runs
   ORDER BY ((run_date)::date) DESC, agent_name;
 
 
@@ -2676,7 +3514,7 @@ CREATE VIEW public.v_rimmer_l1_improvement AS
     round((max(score) - min(score)), 2) AS score_delta,
     bool_or(pass) AS ever_passed,
     (max(run_date))::date AS last_run
-   FROM public.rimmer_runs
+   FROM factory.rimmer_runs
   WHERE ((layer = 1) AND (score IS NOT NULL) AND (score <= (5)::numeric))
   GROUP BY (lower(agent_name)), factory_tenant
  HAVING (count(*) > 1)
@@ -2695,7 +3533,7 @@ CREATE VIEW public.v_rimmer_omatic_canonical AS
             rimmer_runs.notes AS l1_notes,
             rimmer_runs.agent_version AS l1_agent_version,
             rimmer_runs.run_date AS l1_run_date
-           FROM public.rimmer_runs
+           FROM factory.rimmer_runs
           WHERE ((rimmer_runs.factory_tenant = 'omatic'::text) AND (rimmer_runs.layer = 1))
           ORDER BY (lower(rimmer_runs.agent_name)), rimmer_runs.run_date DESC
         ), l2 AS (
@@ -2704,7 +3542,7 @@ CREATE VIEW public.v_rimmer_omatic_canonical AS
             rimmer_runs.pass AS l2_pass,
             rimmer_runs.notes AS l2_notes,
             rimmer_runs.run_date AS l2_run_date
-           FROM public.rimmer_runs
+           FROM factory.rimmer_runs
           WHERE ((rimmer_runs.factory_tenant = 'omatic'::text) AND (rimmer_runs.layer = 2) AND (rimmer_runs.pass IS NOT FALSE))
           ORDER BY (lower(rimmer_runs.agent_name)), rimmer_runs.run_date DESC
         )
@@ -2748,7 +3586,7 @@ CREATE VIEW public.v_rimmer_satellite_coverage AS
     count(*) FILTER (WHERE ((criteria_results ->> 'correction_evidence_found'::text) = 'true'::text)) AS correction_evidence_found,
     count(*) FILTER (WHERE (((criteria_results ->> 'insufficient_evidence'::text) = 'true'::text) OR ((criteria_results -> 'evidence_samples'::text) = '0'::jsonb))) AS insufficient_evidence,
     (max(run_date))::date AS last_collection
-   FROM public.rimmer_runs
+   FROM factory.rimmer_runs
   WHERE (layer = 2)
   GROUP BY factory_tenant
   ORDER BY factory_tenant;
@@ -2769,7 +3607,7 @@ CREATE VIEW public.v_sop_registry AS
     status,
     file_path,
     updated_at
-   FROM public.sop_registry
+   FROM factory.sop_registry
   WHERE (status = 'active'::text)
   ORDER BY sop_id;
 
@@ -2788,7 +3626,7 @@ CREATE VIEW public.v_startup_rules AS
     kr.applies_to,
     kr.tenant_id,
     kr.updated_at
-   FROM (public.known_rules kr
+   FROM (factory.known_rules kr
      CROSS JOIN LATERAL regexp_split_to_table(regexp_replace(COALESCE(kr.applies_to, ''::text), '[{}\[\]"]'::text, ''::text, 'g'::text), '\s*,\s*'::text) agent(agent_name))
   WHERE (((kr.category)::text = 'startup'::text) AND (TRIM(BOTH FROM agent.agent_name) <> ''::text));
 
@@ -2821,1240 +3659,1941 @@ CREATE VIEW public.v_tasks_by_owner AS
             ELSE 0
         END) AS low,
     string_agg(DISTINCT (category)::text, ', '::text) AS categories
-   FROM public.tasks
+   FROM factory.tasks
   WHERE ((status)::text = 'open'::text)
   GROUP BY owner
   ORDER BY (count(*)) DESC;
 
 
 --
--- Name: agent_memory id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: v_tier1_coverage; Type: VIEW; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.agent_memory ALTER COLUMN id SET DEFAULT nextval('public.agent_memory_id_seq'::regclass);
-
-
---
--- Name: brand_messaging id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.brand_messaging ALTER COLUMN id SET DEFAULT nextval('public.brand_messaging_id_seq'::regclass);
-
-
---
--- Name: content_staging id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.content_staging ALTER COLUMN id SET DEFAULT nextval('public.content_staging_id_seq'::regclass);
-
-
---
--- Name: decisions id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.decisions ALTER COLUMN id SET DEFAULT nextval('public.decisions_id_seq'::regclass);
-
-
---
--- Name: docling_registry id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.docling_registry ALTER COLUMN id SET DEFAULT nextval('public.docling_registry_id_seq'::regclass);
-
-
---
--- Name: document_chunks id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.document_chunks ALTER COLUMN id SET DEFAULT nextval('public.document_chunks_id_seq'::regclass);
-
-
---
--- Name: factory_agreements id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.factory_agreements ALTER COLUMN id SET DEFAULT nextval('public.factory_agreements_id_seq'::regclass);
-
-
---
--- Name: factory_sessions id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.factory_sessions ALTER COLUMN id SET DEFAULT nextval('public.factory_sessions_id_seq'::regclass);
-
-
---
--- Name: known_rules id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.known_rules ALTER COLUMN id SET DEFAULT nextval('public.known_rules_id_seq'::regclass);
-
-
---
--- Name: mcp_registry id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.mcp_registry ALTER COLUMN id SET DEFAULT nextval('public.mcp_registry_id_seq'::regclass);
-
-
---
--- Name: process_changelog id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.process_changelog ALTER COLUMN id SET DEFAULT nextval('public.process_changelog_id_seq'::regclass);
+CREATE VIEW public.v_tier1_coverage AS
+ WITH expected AS (
+         SELECT 'tasks'::text AS source_table,
+            ( SELECT count(*) AS count
+                   FROM factory.tasks
+                  WHERE (tasks.tenant_id = 'omatic'::text)) AS source_rows
+        UNION ALL
+         SELECT 'decisions'::text,
+            ( SELECT count(*) AS count
+                   FROM factory.decisions
+                  WHERE (decisions.tenant_id = 'omatic'::text)) AS count
+        UNION ALL
+         SELECT 'brand_messaging'::text,
+            ( SELECT count(*) AS count
+                   FROM brand.brand_messaging
+                  WHERE (brand_messaging.tenant_id = 'omatic'::text)) AS count
+        UNION ALL
+         SELECT 'project_knowledge'::text,
+            ( SELECT count(*) AS count
+                   FROM brain.project_knowledge
+                  WHERE ((project_knowledge.tenant_id = 'omatic'::text) AND COALESCE(project_knowledge.is_active, true))) AS count
+        UNION ALL
+         SELECT 'known_rules'::text,
+            ( SELECT count(*) AS count
+                   FROM factory.known_rules
+                  WHERE (known_rules.tenant_id = 'omatic'::text)) AS count
+        UNION ALL
+         SELECT 'sop_registry'::text,
+            ( SELECT count(*) AS count
+                   FROM factory.sop_registry
+                  WHERE (sop_registry.tenant_id = 'omatic'::text)) AS count
+        UNION ALL
+         SELECT 'agent_identity'::text,
+            ( SELECT count(*) AS count
+                   FROM factory.agent_identity
+                  WHERE (agent_identity.tenant_id = 'omatic'::text)) AS count
+        UNION ALL
+         SELECT 'mcp_registry'::text,
+            ( SELECT count(*) AS count
+                   FROM factory.mcp_registry
+                  WHERE (mcp_registry.tenant_id = 'omatic'::text)) AS count
+        ), indexed AS (
+         SELECT semantic_index.source_table,
+            count(*) AS tier1_rows,
+            count(*) FILTER (WHERE ((semantic_index.embedding IS NULL) OR semantic_index.embedding_stale)) AS pending_embed
+           FROM brain.semantic_index
+          WHERE (semantic_index.tenant_id = 'omatic'::text)
+          GROUP BY semantic_index.source_table
+        )
+ SELECT e.source_table,
+    e.source_rows,
+    COALESCE(i.tier1_rows, (0)::bigint) AS tier1_rows,
+    COALESCE(i.pending_embed, (0)::bigint) AS pending_embed,
+        CASE
+            WHEN ((COALESCE(i.tier1_rows, (0)::bigint) = 0) AND (e.source_rows > 0)) THEN 'MISSING'::text
+            WHEN (COALESCE(i.tier1_rows, (0)::bigint) < e.source_rows) THEN 'PARTIAL'::text
+            ELSE 'OK'::text
+        END AS coverage_status
+   FROM (expected e
+     LEFT JOIN indexed i USING (source_table))
+  ORDER BY
+        CASE
+            WHEN ((COALESCE(i.tier1_rows, (0)::bigint) = 0) AND (e.source_rows > 0)) THEN 0
+            WHEN (COALESCE(i.tier1_rows, (0)::bigint) < e.source_rows) THEN 1
+            ELSE 2
+        END, e.source_table;
 
 
 --
--- Name: project_knowledge id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: work_claims; Type: VIEW; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.project_knowledge ALTER COLUMN id SET DEFAULT nextval('public.project_knowledge_id_seq'::regclass);
-
-
---
--- Name: research id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.research ALTER COLUMN id SET DEFAULT nextval('public.research_id_seq'::regclass);
-
-
---
--- Name: retrieval_eval_results result_id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.retrieval_eval_results ALTER COLUMN result_id SET DEFAULT nextval('public.retrieval_eval_results_result_id_seq'::regclass);
-
-
---
--- Name: retrieval_eval_runs run_id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.retrieval_eval_runs ALTER COLUMN run_id SET DEFAULT nextval('public.retrieval_eval_runs_run_id_seq'::regclass);
+CREATE VIEW public.work_claims AS
+ SELECT id,
+    tenant_id,
+    resource_type,
+    resource_id,
+    claimed_by,
+    session_id,
+    claimed_at,
+    expires_at,
+    released_at,
+    released_by,
+    status,
+    factory_id,
+    platform,
+    claim_note
+   FROM factory.work_claims;
 
 
 --
--- Name: retrieval_events id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: agent_memory id; Type: DEFAULT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.retrieval_events ALTER COLUMN id SET DEFAULT nextval('public.retrieval_events_id_seq'::regclass);
-
-
---
--- Name: rimmer_runs id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.rimmer_runs ALTER COLUMN id SET DEFAULT nextval('public.rimmer_runs_id_seq'::regclass);
+ALTER TABLE ONLY brain.agent_memory ALTER COLUMN id SET DEFAULT nextval('brain.agent_memory_id_seq'::regclass);
 
 
 --
--- Name: rimmer_test_suite id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: docling_registry id; Type: DEFAULT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.rimmer_test_suite ALTER COLUMN id SET DEFAULT nextval('public.rimmer_test_suite_id_seq'::regclass);
-
-
---
--- Name: semantic_index id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.semantic_index ALTER COLUMN id SET DEFAULT nextval('public.semantic_index_id_seq'::regclass);
+ALTER TABLE ONLY brain.docling_registry ALTER COLUMN id SET DEFAULT nextval('brain.docling_registry_id_seq'::regclass);
 
 
 --
--- Name: session_log id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: document_chunks id; Type: DEFAULT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.session_log ALTER COLUMN id SET DEFAULT nextval('public.session_log_id_seq'::regclass);
-
-
---
--- Name: session_mcp_status id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.session_mcp_status ALTER COLUMN id SET DEFAULT nextval('public.session_mcp_status_id_seq'::regclass);
+ALTER TABLE ONLY brain.document_chunks ALTER COLUMN id SET DEFAULT nextval('brain.document_chunks_id_seq'::regclass);
 
 
 --
--- Name: sig_log id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: project_knowledge id; Type: DEFAULT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.sig_log ALTER COLUMN id SET DEFAULT nextval('public.sig_log_id_seq'::regclass);
-
-
---
--- Name: sop_steps id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.sop_steps ALTER COLUMN id SET DEFAULT nextval('public.sop_steps_id_seq'::regclass);
+ALTER TABLE ONLY brain.project_knowledge ALTER COLUMN id SET DEFAULT nextval('brain.project_knowledge_id_seq'::regclass);
 
 
 --
--- Name: tasks id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: research id; Type: DEFAULT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.tasks ALTER COLUMN id SET DEFAULT nextval('public.tasks_id_seq'::regclass);
-
-
---
--- Name: agent_identity agent_identity_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.agent_identity
-    ADD CONSTRAINT agent_identity_pkey PRIMARY KEY (agent_name);
+ALTER TABLE ONLY brain.research ALTER COLUMN id SET DEFAULT nextval('brain.research_id_seq'::regclass);
 
 
 --
--- Name: agent_memory agent_memory_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: semantic_index id; Type: DEFAULT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.agent_memory
+ALTER TABLE ONLY brain.semantic_index ALTER COLUMN id SET DEFAULT nextval('brain.semantic_index_id_seq'::regclass);
+
+
+--
+-- Name: brand_assets id; Type: DEFAULT; Schema: brand; Owner: -
+--
+
+ALTER TABLE ONLY brand.brand_assets ALTER COLUMN id SET DEFAULT nextval('brand.brand_assets_id_seq'::regclass);
+
+
+--
+-- Name: brand_messaging id; Type: DEFAULT; Schema: brand; Owner: -
+--
+
+ALTER TABLE ONLY brand.brand_messaging ALTER COLUMN id SET DEFAULT nextval('brand.brand_messaging_id_seq'::regclass);
+
+
+--
+-- Name: content_staging id; Type: DEFAULT; Schema: brand; Owner: -
+--
+
+ALTER TABLE ONLY brand.content_staging ALTER COLUMN id SET DEFAULT nextval('brand.content_staging_id_seq'::regclass);
+
+
+--
+-- Name: decisions id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.decisions ALTER COLUMN id SET DEFAULT nextval('factory.decisions_id_seq'::regclass);
+
+
+--
+-- Name: factory_agreements id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.factory_agreements ALTER COLUMN id SET DEFAULT nextval('factory.factory_agreements_id_seq'::regclass);
+
+
+--
+-- Name: factory_sessions id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.factory_sessions ALTER COLUMN id SET DEFAULT nextval('factory.factory_sessions_id_seq'::regclass);
+
+
+--
+-- Name: known_rules id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.known_rules ALTER COLUMN id SET DEFAULT nextval('factory.known_rules_id_seq'::regclass);
+
+
+--
+-- Name: mcp_registry id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.mcp_registry ALTER COLUMN id SET DEFAULT nextval('factory.mcp_registry_id_seq'::regclass);
+
+
+--
+-- Name: persona_archetype id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_archetype ALTER COLUMN id SET DEFAULT nextval('factory.persona_archetype_id_seq'::regclass);
+
+
+--
+-- Name: persona_asset id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_asset ALTER COLUMN id SET DEFAULT nextval('factory.persona_asset_id_seq'::regclass);
+
+
+--
+-- Name: persona_build id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_build ALTER COLUMN id SET DEFAULT nextval('factory.persona_build_id_seq'::regclass);
+
+
+--
+-- Name: persona_character_bible id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_character_bible ALTER COLUMN id SET DEFAULT nextval('factory.persona_character_bible_id_seq'::regclass);
+
+
+--
+-- Name: persona_character_dimension id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_character_dimension ALTER COLUMN id SET DEFAULT nextval('factory.persona_character_dimension_id_seq'::regclass);
+
+
+--
+-- Name: persona_drift_check id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_drift_check ALTER COLUMN id SET DEFAULT nextval('factory.persona_drift_check_id_seq'::regclass);
+
+
+--
+-- Name: persona_eval_criteria id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_eval_criteria ALTER COLUMN id SET DEFAULT nextval('factory.persona_eval_criteria_id_seq'::regclass);
+
+
+--
+-- Name: persona_export_target id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_export_target ALTER COLUMN id SET DEFAULT nextval('factory.persona_export_target_id_seq'::regclass);
+
+
+--
+-- Name: persona_lane_contract id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_lane_contract ALTER COLUMN id SET DEFAULT nextval('factory.persona_lane_contract_id_seq'::regclass);
+
+
+--
+-- Name: persona_provenance id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_provenance ALTER COLUMN id SET DEFAULT nextval('factory.persona_provenance_id_seq'::regclass);
+
+
+--
+-- Name: persona_strength id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_strength ALTER COLUMN id SET DEFAULT nextval('factory.persona_strength_id_seq'::regclass);
+
+
+--
+-- Name: persona_tool id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_tool ALTER COLUMN id SET DEFAULT nextval('factory.persona_tool_id_seq'::regclass);
+
+
+--
+-- Name: persona_version id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_version ALTER COLUMN id SET DEFAULT nextval('factory.persona_version_id_seq'::regclass);
+
+
+--
+-- Name: persona_voice_contract id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_voice_contract ALTER COLUMN id SET DEFAULT nextval('factory.persona_voice_contract_id_seq'::regclass);
+
+
+--
+-- Name: process_changelog id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.process_changelog ALTER COLUMN id SET DEFAULT nextval('factory.process_changelog_id_seq'::regclass);
+
+
+--
+-- Name: retrieval_eval_results result_id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.retrieval_eval_results ALTER COLUMN result_id SET DEFAULT nextval('factory.retrieval_eval_results_result_id_seq'::regclass);
+
+
+--
+-- Name: retrieval_eval_runs run_id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.retrieval_eval_runs ALTER COLUMN run_id SET DEFAULT nextval('factory.retrieval_eval_runs_run_id_seq'::regclass);
+
+
+--
+-- Name: retrieval_events id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.retrieval_events ALTER COLUMN id SET DEFAULT nextval('factory.retrieval_events_id_seq'::regclass);
+
+
+--
+-- Name: rimmer_runs id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.rimmer_runs ALTER COLUMN id SET DEFAULT nextval('factory.rimmer_runs_id_seq'::regclass);
+
+
+--
+-- Name: rimmer_test_suite id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.rimmer_test_suite ALTER COLUMN id SET DEFAULT nextval('factory.rimmer_test_suite_id_seq'::regclass);
+
+
+--
+-- Name: session_log id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.session_log ALTER COLUMN id SET DEFAULT nextval('factory.session_log_id_seq'::regclass);
+
+
+--
+-- Name: session_mcp_status id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.session_mcp_status ALTER COLUMN id SET DEFAULT nextval('factory.session_mcp_status_id_seq'::regclass);
+
+
+--
+-- Name: sig_log id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.sig_log ALTER COLUMN id SET DEFAULT nextval('factory.sig_log_id_seq'::regclass);
+
+
+--
+-- Name: sop_steps id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.sop_steps ALTER COLUMN id SET DEFAULT nextval('factory.sop_steps_id_seq'::regclass);
+
+
+--
+-- Name: tasks id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.tasks ALTER COLUMN id SET DEFAULT nextval('factory.tasks_id_seq'::regclass);
+
+
+--
+-- Name: work_claims id; Type: DEFAULT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.work_claims ALTER COLUMN id SET DEFAULT nextval('factory.work_claims_id_seq'::regclass);
+
+
+--
+-- Name: agent_memory agent_memory_pkey; Type: CONSTRAINT; Schema: brain; Owner: -
+--
+
+ALTER TABLE ONLY brain.agent_memory
     ADD CONSTRAINT agent_memory_pkey PRIMARY KEY (id);
 
 
 --
--- Name: agent_state agent_state_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: docling_registry docling_registry_file_path_key; Type: CONSTRAINT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.agent_state
-    ADD CONSTRAINT agent_state_pkey PRIMARY KEY (agent_name);
-
-
---
--- Name: brand_messaging brand_messaging_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.brand_messaging
-    ADD CONSTRAINT brand_messaging_pkey PRIMARY KEY (id);
-
-
---
--- Name: content_staging content_staging_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.content_staging
-    ADD CONSTRAINT content_staging_pkey PRIMARY KEY (id);
-
-
---
--- Name: decisions decisions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.decisions
-    ADD CONSTRAINT decisions_pkey PRIMARY KEY (id);
-
-
---
--- Name: decommissioned_terms decommissioned_terms_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.decommissioned_terms
-    ADD CONSTRAINT decommissioned_terms_pkey PRIMARY KEY (term);
-
-
---
--- Name: docling_registry docling_registry_file_path_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.docling_registry
+ALTER TABLE ONLY brain.docling_registry
     ADD CONSTRAINT docling_registry_file_path_key UNIQUE (file_path);
 
 
 --
--- Name: docling_registry docling_registry_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: docling_registry docling_registry_pkey; Type: CONSTRAINT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.docling_registry
+ALTER TABLE ONLY brain.docling_registry
     ADD CONSTRAINT docling_registry_pkey PRIMARY KEY (id);
 
 
 --
--- Name: document_chunks document_chunks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: document_chunks document_chunks_pkey; Type: CONSTRAINT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.document_chunks
+ALTER TABLE ONLY brain.document_chunks
     ADD CONSTRAINT document_chunks_pkey PRIMARY KEY (id);
 
 
 --
--- Name: document_chunks document_chunks_tenant_source_chunk_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: document_chunks document_chunks_tenant_source_chunk_key; Type: CONSTRAINT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.document_chunks
+ALTER TABLE ONLY brain.document_chunks
     ADD CONSTRAINT document_chunks_tenant_source_chunk_key UNIQUE (tenant_id, source_type, source_name, chunk_index);
 
 
 --
--- Name: factory_agreements factory_agreements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: project_knowledge project_knowledge_pkey; Type: CONSTRAINT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.factory_agreements
-    ADD CONSTRAINT factory_agreements_pkey PRIMARY KEY (id);
-
-
---
--- Name: factory_agreements factory_agreements_tenant_id_agent_name_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.factory_agreements
-    ADD CONSTRAINT factory_agreements_tenant_id_agent_name_key UNIQUE (tenant_id, agent_name);
-
-
---
--- Name: factory_config factory_config_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.factory_config
-    ADD CONSTRAINT factory_config_pkey PRIMARY KEY (key, tenant_id);
-
-
---
--- Name: factory_sessions factory_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.factory_sessions
-    ADD CONSTRAINT factory_sessions_pkey PRIMARY KEY (id);
-
-
---
--- Name: known_rules known_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.known_rules
-    ADD CONSTRAINT known_rules_pkey PRIMARY KEY (id);
-
-
---
--- Name: mcp_registry mcp_registry_connector_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.mcp_registry
-    ADD CONSTRAINT mcp_registry_connector_id_key UNIQUE (connector_id);
-
-
---
--- Name: mcp_registry mcp_registry_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.mcp_registry
-    ADD CONSTRAINT mcp_registry_pkey PRIMARY KEY (id);
-
-
---
--- Name: process_changelog process_changelog_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.process_changelog
-    ADD CONSTRAINT process_changelog_pkey PRIMARY KEY (id);
-
-
---
--- Name: project_knowledge project_knowledge_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.project_knowledge
+ALTER TABLE ONLY brain.project_knowledge
     ADD CONSTRAINT project_knowledge_pkey PRIMARY KEY (id);
 
 
 --
--- Name: research research_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: research research_pkey; Type: CONSTRAINT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.research
+ALTER TABLE ONLY brain.research
     ADD CONSTRAINT research_pkey PRIMARY KEY (id);
 
 
 --
--- Name: retrieval_eval_cases retrieval_eval_cases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: semantic_index semantic_index_pkey; Type: CONSTRAINT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.retrieval_eval_cases
-    ADD CONSTRAINT retrieval_eval_cases_pkey PRIMARY KEY (case_id);
-
-
---
--- Name: retrieval_eval_results retrieval_eval_results_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.retrieval_eval_results
-    ADD CONSTRAINT retrieval_eval_results_pkey PRIMARY KEY (result_id);
-
-
---
--- Name: retrieval_eval_runs retrieval_eval_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.retrieval_eval_runs
-    ADD CONSTRAINT retrieval_eval_runs_pkey PRIMARY KEY (run_id);
-
-
---
--- Name: retrieval_events retrieval_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.retrieval_events
-    ADD CONSTRAINT retrieval_events_pkey PRIMARY KEY (id);
-
-
---
--- Name: rimmer_runs rimmer_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.rimmer_runs
-    ADD CONSTRAINT rimmer_runs_pkey PRIMARY KEY (id);
-
-
---
--- Name: rimmer_test_suite rimmer_test_suite_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.rimmer_test_suite
-    ADD CONSTRAINT rimmer_test_suite_pkey PRIMARY KEY (id);
-
-
---
--- Name: semantic_index semantic_index_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.semantic_index
+ALTER TABLE ONLY brain.semantic_index
     ADD CONSTRAINT semantic_index_pkey PRIMARY KEY (id);
 
 
 --
--- Name: semantic_index semantic_index_tenant_id_source_table_source_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: semantic_index semantic_index_tenant_id_source_table_source_id_key; Type: CONSTRAINT; Schema: brain; Owner: -
 --
 
-ALTER TABLE ONLY public.semantic_index
+ALTER TABLE ONLY brain.semantic_index
     ADD CONSTRAINT semantic_index_tenant_id_source_table_source_id_key UNIQUE (tenant_id, source_table, source_id);
 
 
 --
--- Name: session_log session_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: brand_assets brand_assets_pkey; Type: CONSTRAINT; Schema: brand; Owner: -
 --
 
-ALTER TABLE ONLY public.session_log
+ALTER TABLE ONLY brand.brand_assets
+    ADD CONSTRAINT brand_assets_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: brand_assets brand_assets_rel_path_key; Type: CONSTRAINT; Schema: brand; Owner: -
+--
+
+ALTER TABLE ONLY brand.brand_assets
+    ADD CONSTRAINT brand_assets_rel_path_key UNIQUE (rel_path);
+
+
+--
+-- Name: brand_messaging brand_messaging_pkey; Type: CONSTRAINT; Schema: brand; Owner: -
+--
+
+ALTER TABLE ONLY brand.brand_messaging
+    ADD CONSTRAINT brand_messaging_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: content_staging content_staging_pkey; Type: CONSTRAINT; Schema: brand; Owner: -
+--
+
+ALTER TABLE ONLY brand.content_staging
+    ADD CONSTRAINT content_staging_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: agent_identity agent_identity_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.agent_identity
+    ADD CONSTRAINT agent_identity_pkey PRIMARY KEY (agent_name);
+
+
+--
+-- Name: agent_state agent_state_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.agent_state
+    ADD CONSTRAINT agent_state_pkey PRIMARY KEY (agent_name);
+
+
+--
+-- Name: decisions decisions_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.decisions
+    ADD CONSTRAINT decisions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: decommissioned_term_allowlist decommissioned_term_allowlist_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.decommissioned_term_allowlist
+    ADD CONSTRAINT decommissioned_term_allowlist_pkey PRIMARY KEY (tenant_id, source_table, source_id, term);
+
+
+--
+-- Name: decommissioned_terms decommissioned_terms_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.decommissioned_terms
+    ADD CONSTRAINT decommissioned_terms_pkey PRIMARY KEY (term);
+
+
+--
+-- Name: factory_agreements factory_agreements_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.factory_agreements
+    ADD CONSTRAINT factory_agreements_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: factory_agreements factory_agreements_tenant_id_agent_name_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.factory_agreements
+    ADD CONSTRAINT factory_agreements_tenant_id_agent_name_key UNIQUE (tenant_id, agent_name);
+
+
+--
+-- Name: factory_config factory_config_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.factory_config
+    ADD CONSTRAINT factory_config_pkey PRIMARY KEY (key, tenant_id);
+
+
+--
+-- Name: factory_lanes factory_lanes_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.factory_lanes
+    ADD CONSTRAINT factory_lanes_pkey PRIMARY KEY (tenant_id, lane);
+
+
+--
+-- Name: factory_sessions factory_sessions_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.factory_sessions
+    ADD CONSTRAINT factory_sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: known_rules known_rules_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.known_rules
+    ADD CONSTRAINT known_rules_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: mcp_registry mcp_registry_connector_id_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.mcp_registry
+    ADD CONSTRAINT mcp_registry_connector_id_key UNIQUE (connector_id);
+
+
+--
+-- Name: mcp_registry mcp_registry_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.mcp_registry
+    ADD CONSTRAINT mcp_registry_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_archetype persona_archetype_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_archetype
+    ADD CONSTRAINT persona_archetype_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_archetype persona_archetype_version_id_layer_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_archetype
+    ADD CONSTRAINT persona_archetype_version_id_layer_key UNIQUE (version_id, layer);
+
+
+--
+-- Name: persona_asset persona_asset_agent_name_asset_type_variant_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_asset
+    ADD CONSTRAINT persona_asset_agent_name_asset_type_variant_key UNIQUE (agent_name, asset_type, variant);
+
+
+--
+-- Name: persona_asset persona_asset_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_asset
+    ADD CONSTRAINT persona_asset_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_build persona_build_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_build
+    ADD CONSTRAINT persona_build_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_character_bible persona_character_bible_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_character_bible
+    ADD CONSTRAINT persona_character_bible_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_character_dimension persona_character_dimension_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_character_dimension
+    ADD CONSTRAINT persona_character_dimension_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_character_dimension persona_character_dimension_version_id_dimension_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_character_dimension
+    ADD CONSTRAINT persona_character_dimension_version_id_dimension_key UNIQUE (version_id, dimension);
+
+
+--
+-- Name: persona_drift_check persona_drift_check_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_drift_check
+    ADD CONSTRAINT persona_drift_check_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_eval_criteria persona_eval_criteria_agent_name_criterion_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_eval_criteria
+    ADD CONSTRAINT persona_eval_criteria_agent_name_criterion_key UNIQUE (agent_name, criterion);
+
+
+--
+-- Name: persona_eval_criteria persona_eval_criteria_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_eval_criteria
+    ADD CONSTRAINT persona_eval_criteria_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_export_target persona_export_target_agent_name_target_type_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_export_target
+    ADD CONSTRAINT persona_export_target_agent_name_target_type_key UNIQUE (agent_name, target_type);
+
+
+--
+-- Name: persona_export_target persona_export_target_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_export_target
+    ADD CONSTRAINT persona_export_target_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_lane_contract persona_lane_contract_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_lane_contract
+    ADD CONSTRAINT persona_lane_contract_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona persona_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona
+    ADD CONSTRAINT persona_pkey PRIMARY KEY (agent_name);
+
+
+--
+-- Name: persona_provenance persona_provenance_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_provenance
+    ADD CONSTRAINT persona_provenance_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_strength persona_strength_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_strength
+    ADD CONSTRAINT persona_strength_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_strength persona_strength_version_id_strength_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_strength
+    ADD CONSTRAINT persona_strength_version_id_strength_key UNIQUE (version_id, strength);
+
+
+--
+-- Name: persona_tool persona_tool_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_tool
+    ADD CONSTRAINT persona_tool_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_tool persona_tool_version_id_tool_name_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_tool
+    ADD CONSTRAINT persona_tool_version_id_tool_name_key UNIQUE (version_id, tool_name);
+
+
+--
+-- Name: persona_version persona_version_agent_name_version_key; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_version
+    ADD CONSTRAINT persona_version_agent_name_version_key UNIQUE (agent_name, version);
+
+
+--
+-- Name: persona_version persona_version_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_version
+    ADD CONSTRAINT persona_version_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persona_voice_contract persona_voice_contract_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_voice_contract
+    ADD CONSTRAINT persona_voice_contract_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: process_changelog process_changelog_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.process_changelog
+    ADD CONSTRAINT process_changelog_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: retrieval_eval_cases retrieval_eval_cases_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.retrieval_eval_cases
+    ADD CONSTRAINT retrieval_eval_cases_pkey PRIMARY KEY (case_id);
+
+
+--
+-- Name: retrieval_eval_results retrieval_eval_results_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.retrieval_eval_results
+    ADD CONSTRAINT retrieval_eval_results_pkey PRIMARY KEY (result_id);
+
+
+--
+-- Name: retrieval_eval_runs retrieval_eval_runs_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.retrieval_eval_runs
+    ADD CONSTRAINT retrieval_eval_runs_pkey PRIMARY KEY (run_id);
+
+
+--
+-- Name: retrieval_events retrieval_events_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.retrieval_events
+    ADD CONSTRAINT retrieval_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: rimmer_runs rimmer_runs_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.rimmer_runs
+    ADD CONSTRAINT rimmer_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: rimmer_test_suite rimmer_test_suite_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.rimmer_test_suite
+    ADD CONSTRAINT rimmer_test_suite_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: session_log session_log_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.session_log
     ADD CONSTRAINT session_log_pkey PRIMARY KEY (id);
 
 
 --
--- Name: session_mcp_status session_mcp_status_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: session_mcp_status session_mcp_status_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.session_mcp_status
+ALTER TABLE ONLY factory.session_mcp_status
     ADD CONSTRAINT session_mcp_status_pkey PRIMARY KEY (id);
 
 
 --
--- Name: session_mcp_status session_mcp_status_session_id_connector_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: session_mcp_status session_mcp_status_session_id_connector_id_key; Type: CONSTRAINT; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.session_mcp_status
+ALTER TABLE ONLY factory.session_mcp_status
     ADD CONSTRAINT session_mcp_status_session_id_connector_id_key UNIQUE (session_id, connector_id);
 
 
 --
--- Name: sig_log sig_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: sig_log sig_log_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.sig_log
+ALTER TABLE ONLY factory.sig_log
     ADD CONSTRAINT sig_log_pkey PRIMARY KEY (id);
 
 
 --
--- Name: sop_registry sop_registry_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: sop_registry sop_registry_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.sop_registry
+ALTER TABLE ONLY factory.sop_registry
     ADD CONSTRAINT sop_registry_pkey PRIMARY KEY (sop_id);
 
 
 --
--- Name: sop_steps sop_steps_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: sop_steps sop_steps_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.sop_steps
+ALTER TABLE ONLY factory.sop_steps
     ADD CONSTRAINT sop_steps_pkey PRIMARY KEY (id);
 
 
 --
--- Name: sop_steps sop_steps_sop_id_step_number_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: sop_steps sop_steps_sop_id_step_number_key; Type: CONSTRAINT; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.sop_steps
+ALTER TABLE ONLY factory.sop_steps
     ADD CONSTRAINT sop_steps_sop_id_step_number_key UNIQUE (sop_id, step_number);
 
 
 --
--- Name: tasks tasks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: tasks tasks_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.tasks
+ALTER TABLE ONLY factory.tasks
     ADD CONSTRAINT tasks_pkey PRIMARY KEY (id);
 
 
 --
--- Name: document_chunks_embedding_hnsw; Type: INDEX; Schema: public; Owner: -
+-- Name: work_claims work_claims_pkey; Type: CONSTRAINT; Schema: factory; Owner: -
 --
 
-CREATE INDEX document_chunks_embedding_hnsw ON public.document_chunks USING hnsw (embedding public.vector_cosine_ops) WHERE (embedding IS NOT NULL);
+ALTER TABLE ONLY factory.work_claims
+    ADD CONSTRAINT work_claims_pkey PRIMARY KEY (id);
 
 
 --
--- Name: document_chunks_embedding_hnsw_omatic; Type: INDEX; Schema: public; Owner: -
+-- Name: document_chunks_embedding_hnsw; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX document_chunks_embedding_hnsw_omatic ON public.document_chunks USING hnsw (embedding public.vector_cosine_ops) WHERE ((tenant_id = 'omatic'::text) AND (embedding IS NOT NULL));
+CREATE INDEX document_chunks_embedding_hnsw ON brain.document_chunks USING hnsw (embedding public.vector_cosine_ops) WHERE (embedding IS NOT NULL);
 
 
 --
--- Name: document_chunks_stale; Type: INDEX; Schema: public; Owner: -
+-- Name: document_chunks_embedding_hnsw_omatic; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX document_chunks_stale ON public.document_chunks USING btree (tenant_id) WHERE (embedding_stale = true);
+CREATE INDEX document_chunks_embedding_hnsw_omatic ON brain.document_chunks USING hnsw (embedding public.vector_cosine_ops) WHERE ((tenant_id = 'omatic'::text) AND (embedding IS NOT NULL));
 
 
 --
--- Name: document_chunks_tsv_gin; Type: INDEX; Schema: public; Owner: -
+-- Name: document_chunks_stale; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX document_chunks_tsv_gin ON public.document_chunks USING gin (tsv);
+CREATE INDEX document_chunks_stale ON brain.document_chunks USING btree (tenant_id) WHERE (embedding_stale = true);
 
 
 --
--- Name: idx_agent_memory_type; Type: INDEX; Schema: public; Owner: -
+-- Name: document_chunks_tsv_gin; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_agent_memory_type ON public.agent_memory USING btree (agent_name, memory_type);
+CREATE INDEX document_chunks_tsv_gin ON brain.document_chunks USING gin (tsv);
 
 
 --
--- Name: idx_agent_state_factory; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_agent_memory_type; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_agent_state_factory ON public.agent_state USING btree (factory);
+CREATE INDEX idx_agent_memory_type ON brain.agent_memory USING btree (agent_name, memory_type);
 
 
 --
--- Name: idx_agent_state_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_doc_chunks_source; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_agent_state_status ON public.agent_state USING btree (status);
+CREATE INDEX idx_doc_chunks_source ON brain.document_chunks USING btree (source_id, source_type);
 
 
 --
--- Name: idx_brand_messaging_category; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_doc_chunks_tenant; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_brand_messaging_category ON public.brand_messaging USING btree (category);
+CREATE INDEX idx_doc_chunks_tenant ON brain.document_chunks USING btree (tenant_id);
 
 
 --
--- Name: idx_brand_messaging_tenant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_docling_category; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_brand_messaging_tenant ON public.brand_messaging USING btree (tenant_id);
+CREATE INDEX idx_docling_category ON brain.docling_registry USING btree (category);
 
 
 --
--- Name: idx_decisions_category; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_docling_required; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_decisions_category ON public.decisions USING btree (category);
+CREATE INDEX idx_docling_required ON brain.docling_registry USING btree (docling_required);
 
 
 --
--- Name: idx_decisions_date; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_document_chunks_staleness; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_decisions_date ON public.decisions USING btree (decision_date);
+CREATE INDEX idx_document_chunks_staleness ON brain.document_chunks USING btree (embedded_at, created_at);
 
 
 --
--- Name: idx_doc_chunks_source; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_project_knowledge_active; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_doc_chunks_source ON public.document_chunks USING btree (source_id, source_type);
+CREATE INDEX idx_project_knowledge_active ON brain.project_knowledge USING btree (is_active) WHERE (is_active = true);
 
 
 --
--- Name: idx_doc_chunks_tenant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_project_knowledge_tenant; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_doc_chunks_tenant ON public.document_chunks USING btree (tenant_id);
+CREATE INDEX idx_project_knowledge_tenant ON brain.project_knowledge USING btree (tenant_id);
 
 
 --
--- Name: idx_docling_category; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_project_knowledge_type; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_docling_category ON public.docling_registry USING btree (category);
+CREATE INDEX idx_project_knowledge_type ON brain.project_knowledge USING btree (knowledge_type);
 
 
 --
--- Name: idx_docling_required; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_research_created; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_docling_required ON public.docling_registry USING btree (docling_required);
+CREATE INDEX idx_research_created ON brain.research USING btree (created_at DESC);
 
 
 --
--- Name: idx_document_chunks_staleness; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_research_session; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_document_chunks_staleness ON public.document_chunks USING btree (embedded_at, created_at);
+CREATE INDEX idx_research_session ON brain.research USING btree (session_id);
 
 
 --
--- Name: idx_factory_config_category; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_research_status; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_factory_config_category ON public.factory_config USING btree (category, tenant_id);
+CREATE INDEX idx_research_status ON brain.research USING btree (status);
 
 
 --
--- Name: idx_factory_sessions_date; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_research_tags; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_factory_sessions_date ON public.factory_sessions USING btree (session_date);
+CREATE INDEX idx_research_tags ON brain.research USING gin (tags);
 
 
 --
--- Name: idx_factory_sessions_tenant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_research_topic; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_factory_sessions_tenant ON public.factory_sessions USING btree (tenant_id);
+CREATE INDEX idx_research_topic ON brain.research USING btree (topic);
 
 
 --
--- Name: idx_known_rules_category; Type: INDEX; Schema: public; Owner: -
+-- Name: semantic_index_embedding_hnsw; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_known_rules_category ON public.known_rules USING btree (category);
+CREATE INDEX semantic_index_embedding_hnsw ON brain.semantic_index USING hnsw (embedding public.vector_cosine_ops) WHERE (embedding IS NOT NULL);
 
 
 --
--- Name: idx_known_rules_tenant_applies; Type: INDEX; Schema: public; Owner: -
+-- Name: semantic_index_embedding_hnsw_omatic; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_known_rules_tenant_applies ON public.known_rules USING btree (tenant_id, applies_to);
+CREATE INDEX semantic_index_embedding_hnsw_omatic ON brain.semantic_index USING hnsw (embedding public.vector_cosine_ops) WHERE ((tenant_id = 'omatic'::text) AND (embedding IS NOT NULL));
 
 
 --
--- Name: idx_known_rules_tenant_category; Type: INDEX; Schema: public; Owner: -
+-- Name: semantic_index_stale; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_known_rules_tenant_category ON public.known_rules USING btree (tenant_id, category);
+CREATE INDEX semantic_index_stale ON brain.semantic_index USING btree (tenant_id) WHERE (embedding_stale = true);
 
 
 --
--- Name: idx_known_rules_tenant_type_enf; Type: INDEX; Schema: public; Owner: -
+-- Name: semantic_index_tsv_gin; Type: INDEX; Schema: brain; Owner: -
 --
 
-CREATE INDEX idx_known_rules_tenant_type_enf ON public.known_rules USING btree (tenant_id, rule_type, enforcement);
+CREATE INDEX semantic_index_tsv_gin ON brain.semantic_index USING gin (tsv);
 
 
 --
--- Name: idx_project_knowledge_active; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_brand_messaging_category; Type: INDEX; Schema: brand; Owner: -
 --
 
-CREATE INDEX idx_project_knowledge_active ON public.project_knowledge USING btree (is_active) WHERE (is_active = true);
+CREATE INDEX idx_brand_messaging_category ON brand.brand_messaging USING btree (category);
 
 
 --
--- Name: idx_project_knowledge_tenant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_brand_messaging_tenant; Type: INDEX; Schema: brand; Owner: -
 --
 
-CREATE INDEX idx_project_knowledge_tenant ON public.project_knowledge USING btree (tenant_id);
+CREATE INDEX idx_brand_messaging_tenant ON brand.brand_messaging USING btree (tenant_id);
 
 
 --
--- Name: idx_project_knowledge_type; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_staging_assigned; Type: INDEX; Schema: brand; Owner: -
 --
 
-CREATE INDEX idx_project_knowledge_type ON public.project_knowledge USING btree (knowledge_type);
+CREATE INDEX idx_staging_assigned ON brand.content_staging USING btree (assigned_to);
 
 
 --
--- Name: idx_research_created; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_staging_session; Type: INDEX; Schema: brand; Owner: -
 --
 
-CREATE INDEX idx_research_created ON public.research USING btree (created_at DESC);
+CREATE INDEX idx_staging_session ON brand.content_staging USING btree (session_id);
 
 
 --
--- Name: idx_research_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_staging_status; Type: INDEX; Schema: brand; Owner: -
 --
 
-CREATE INDEX idx_research_session ON public.research USING btree (session_id);
+CREATE INDEX idx_staging_status ON brand.content_staging USING btree (status);
 
 
 --
--- Name: idx_research_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_staging_type; Type: INDEX; Schema: brand; Owner: -
 --
 
-CREATE INDEX idx_research_status ON public.research USING btree (status);
+CREATE INDEX idx_staging_type ON brand.content_staging USING btree (content_type);
 
 
 --
--- Name: idx_research_tags; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_agent_state_factory; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_research_tags ON public.research USING gin (tags);
+CREATE INDEX idx_agent_state_factory ON factory.agent_state USING btree (factory);
 
 
 --
--- Name: idx_research_topic; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_agent_state_status; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_research_topic ON public.research USING btree (topic);
+CREATE INDEX idx_agent_state_status ON factory.agent_state USING btree (status);
 
 
 --
--- Name: idx_retrieval_eval_cases_tenant_active; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_decisions_category; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_retrieval_eval_cases_tenant_active ON public.retrieval_eval_cases USING btree (tenant_id, active, target_function);
+CREATE INDEX idx_decisions_category ON factory.decisions USING btree (category);
 
 
 --
--- Name: idx_retrieval_eval_results_run_case; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_decisions_date; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_retrieval_eval_results_run_case ON public.retrieval_eval_results USING btree (run_id, case_id);
+CREATE INDEX idx_decisions_date ON factory.decisions USING btree (decision_date);
 
 
 --
--- Name: idx_retrieval_eval_runs_tenant_started; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_factory_config_category; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_retrieval_eval_runs_tenant_started ON public.retrieval_eval_runs USING btree (tenant_id, started_at DESC);
+CREATE INDEX idx_factory_config_category ON factory.factory_config USING btree (category, tenant_id);
 
 
 --
--- Name: idx_retrieval_events_function_created; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_factory_sessions_date; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_retrieval_events_function_created ON public.retrieval_events USING btree (search_function, created_at DESC);
+CREATE INDEX idx_factory_sessions_date ON factory.factory_sessions USING btree (session_date);
 
 
 --
--- Name: idx_retrieval_events_tenant_created; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_factory_sessions_tenant; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_retrieval_events_tenant_created ON public.retrieval_events USING btree (tenant_id, created_at DESC);
+CREATE INDEX idx_factory_sessions_tenant ON factory.factory_sessions USING btree (tenant_id);
 
 
 --
--- Name: idx_retrieval_events_used_vector; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_known_rules_category; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_retrieval_events_used_vector ON public.retrieval_events USING btree (used_vector, created_at DESC);
+CREATE INDEX idx_known_rules_category ON factory.known_rules USING btree (category);
 
 
 --
--- Name: idx_rimmer_agent; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_known_rules_tenant_applies; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_rimmer_agent ON public.rimmer_runs USING btree (agent_name);
+CREATE INDEX idx_known_rules_tenant_applies ON factory.known_rules USING btree (tenant_id, applies_to);
 
 
 --
--- Name: idx_rimmer_layer; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_known_rules_tenant_category; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_rimmer_layer ON public.rimmer_runs USING btree (layer);
+CREATE INDEX idx_known_rules_tenant_category ON factory.known_rules USING btree (tenant_id, category);
 
 
 --
--- Name: idx_rimmer_model; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_known_rules_tenant_type_enf; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_rimmer_model ON public.rimmer_runs USING btree (model_tested);
+CREATE INDEX idx_known_rules_tenant_type_enf ON factory.known_rules USING btree (tenant_id, rule_type, enforcement);
 
 
 --
--- Name: idx_rimmer_run_date; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_archetype_ver; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_rimmer_run_date ON public.rimmer_runs USING btree (run_date DESC);
+CREATE INDEX idx_persona_archetype_ver ON factory.persona_archetype USING btree (version_id);
 
 
 --
--- Name: idx_session_log_agent; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_asset_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_session_log_agent ON public.session_log USING btree (agent);
+CREATE INDEX idx_persona_asset_agent ON factory.persona_asset USING btree (agent_name);
 
 
 --
--- Name: idx_session_log_date; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_bible_ver; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_session_log_date ON public.session_log USING btree (session_date);
+CREATE INDEX idx_persona_bible_ver ON factory.persona_character_bible USING btree (version_id);
 
 
 --
--- Name: idx_session_log_tenant_event; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_build_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_session_log_tenant_event ON public.session_log USING btree (tenant_id, event_type);
+CREATE INDEX idx_persona_build_agent ON factory.persona_build USING btree (agent_name, target_type);
 
 
 --
--- Name: idx_session_mcp_status_result; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_dimension_ver; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_session_mcp_status_result ON public.session_mcp_status USING btree (probe_result);
+CREATE INDEX idx_persona_dimension_ver ON factory.persona_character_dimension USING btree (version_id);
 
 
 --
--- Name: idx_session_mcp_status_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_drift_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_session_mcp_status_session ON public.session_mcp_status USING btree (session_id);
+CREATE INDEX idx_persona_drift_agent ON factory.persona_drift_check USING btree (agent_name);
 
 
 --
--- Name: idx_sig_log_agent; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_eval_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_sig_log_agent ON public.sig_log USING btree (agent_name);
+CREATE INDEX idx_persona_eval_agent ON factory.persona_eval_criteria USING btree (agent_name);
 
 
 --
--- Name: idx_sig_log_created; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_export_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_sig_log_created ON public.sig_log USING btree (created_at DESC);
+CREATE INDEX idx_persona_export_agent ON factory.persona_export_target USING btree (agent_name);
 
 
 --
--- Name: idx_sig_log_date; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_lane_ver; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_sig_log_date ON public.sig_log USING btree (log_date DESC);
+CREATE INDEX idx_persona_lane_ver ON factory.persona_lane_contract USING btree (version_id);
 
 
 --
--- Name: idx_sop_registry_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_prov_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_sop_registry_status ON public.sop_registry USING btree (status);
+CREATE INDEX idx_persona_prov_agent ON factory.persona_provenance USING btree (agent_name);
 
 
 --
--- Name: idx_sop_registry_tenant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_strength_ver; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_sop_registry_tenant ON public.sop_registry USING btree (tenant_id);
+CREATE INDEX idx_persona_strength_ver ON factory.persona_strength USING btree (version_id);
 
 
 --
--- Name: idx_sop_registry_tenant_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_tool_ver; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_sop_registry_tenant_status ON public.sop_registry USING btree (tenant_id, status);
+CREATE INDEX idx_persona_tool_ver ON factory.persona_tool USING btree (version_id);
 
 
 --
--- Name: idx_staging_assigned; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_version_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_staging_assigned ON public.content_staging USING btree (assigned_to);
+CREATE INDEX idx_persona_version_agent ON factory.persona_version USING btree (agent_name);
 
 
 --
--- Name: idx_staging_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_voice_ver; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_staging_session ON public.content_staging USING btree (session_id);
+CREATE INDEX idx_persona_voice_ver ON factory.persona_voice_contract USING btree (version_id);
 
 
 --
--- Name: idx_staging_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_retrieval_eval_cases_tenant_active; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_staging_status ON public.content_staging USING btree (status);
+CREATE INDEX idx_retrieval_eval_cases_tenant_active ON factory.retrieval_eval_cases USING btree (tenant_id, active, target_function);
 
 
 --
--- Name: idx_staging_type; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_retrieval_eval_results_run_case; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_staging_type ON public.content_staging USING btree (content_type);
+CREATE INDEX idx_retrieval_eval_results_run_case ON factory.retrieval_eval_results USING btree (run_id, case_id);
 
 
 --
--- Name: idx_tasks_category; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_retrieval_eval_runs_tenant_started; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_tasks_category ON public.tasks USING btree (category);
+CREATE INDEX idx_retrieval_eval_runs_tenant_started ON factory.retrieval_eval_runs USING btree (tenant_id, started_at DESC);
 
 
 --
--- Name: idx_tasks_created; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_retrieval_events_function_created; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_tasks_created ON public.tasks USING btree (created_at DESC);
+CREATE INDEX idx_retrieval_events_function_created ON factory.retrieval_events USING btree (search_function, created_at DESC);
 
 
 --
--- Name: idx_tasks_owner; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_retrieval_events_tenant_created; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_tasks_owner ON public.tasks USING btree (owner);
+CREATE INDEX idx_retrieval_events_tenant_created ON factory.retrieval_events USING btree (tenant_id, created_at DESC);
 
 
 --
--- Name: idx_tasks_priority; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_retrieval_events_used_vector; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_tasks_priority ON public.tasks USING btree (priority);
+CREATE INDEX idx_retrieval_events_used_vector ON factory.retrieval_events USING btree (used_vector, created_at DESC);
 
 
 --
--- Name: idx_tasks_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_rimmer_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_tasks_status ON public.tasks USING btree (status);
+CREATE INDEX idx_rimmer_agent ON factory.rimmer_runs USING btree (agent_name);
 
 
 --
--- Name: idx_tasks_status_category; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_rimmer_layer; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_tasks_status_category ON public.tasks USING btree (status, category);
+CREATE INDEX idx_rimmer_layer ON factory.rimmer_runs USING btree (layer);
 
 
 --
--- Name: idx_tasks_tenant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_rimmer_model; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX idx_tasks_tenant ON public.tasks USING btree (tenant_id);
+CREATE INDEX idx_rimmer_model ON factory.rimmer_runs USING btree (model_tested);
 
 
 --
--- Name: mv_agent_eval_status_pk; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_rimmer_run_date; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE UNIQUE INDEX mv_agent_eval_status_pk ON public.mv_agent_eval_status USING btree (agent_name);
+CREATE INDEX idx_rimmer_run_date ON factory.rimmer_runs USING btree (run_date DESC);
 
 
 --
--- Name: mv_dashboard_pk; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_session_log_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE UNIQUE INDEX mv_dashboard_pk ON public.mv_dashboard USING btree ((true));
+CREATE INDEX idx_session_log_agent ON factory.session_log USING btree (agent);
 
 
 --
--- Name: mv_embedding_health_pk; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_session_log_date; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE UNIQUE INDEX mv_embedding_health_pk ON public.mv_embedding_health USING btree (tier, tenant_id);
+CREATE INDEX idx_session_log_date ON factory.session_log USING btree (session_date);
 
 
 --
--- Name: mv_factory_kernel_health_pk; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_session_log_tenant_event; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE UNIQUE INDEX mv_factory_kernel_health_pk ON public.mv_factory_kernel_health USING btree (standard);
+CREATE INDEX idx_session_log_tenant_event ON factory.session_log USING btree (tenant_id, event_type);
 
 
 --
--- Name: mv_startup_snapshot_pk; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_session_mcp_status_result; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE UNIQUE INDEX mv_startup_snapshot_pk ON public.mv_startup_snapshot USING btree (last_session_id);
+CREATE INDEX idx_session_mcp_status_result ON factory.session_mcp_status USING btree (probe_result);
 
 
 --
--- Name: semantic_index_embedding_hnsw; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_session_mcp_status_session; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX semantic_index_embedding_hnsw ON public.semantic_index USING hnsw (embedding public.vector_cosine_ops) WHERE (embedding IS NOT NULL);
+CREATE INDEX idx_session_mcp_status_session ON factory.session_mcp_status USING btree (session_id);
 
 
 --
--- Name: semantic_index_embedding_hnsw_omatic; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_sig_log_agent; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX semantic_index_embedding_hnsw_omatic ON public.semantic_index USING hnsw (embedding public.vector_cosine_ops) WHERE ((tenant_id = 'omatic'::text) AND (embedding IS NOT NULL));
+CREATE INDEX idx_sig_log_agent ON factory.sig_log USING btree (agent_name);
 
 
 --
--- Name: semantic_index_stale; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_sig_log_created; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX semantic_index_stale ON public.semantic_index USING btree (tenant_id) WHERE (embedding_stale = true);
+CREATE INDEX idx_sig_log_created ON factory.sig_log USING btree (created_at DESC);
 
 
 --
--- Name: semantic_index_tsv_gin; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_sig_log_date; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE INDEX semantic_index_tsv_gin ON public.semantic_index USING gin (tsv);
+CREATE INDEX idx_sig_log_date ON factory.sig_log USING btree (log_date DESC);
 
 
 --
--- Name: agent_identity trg_agent_identity_content_change; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_sop_registry_status; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_agent_identity_content_change AFTER UPDATE OF callsign, primary_domain, voice_anchor ON public.agent_identity FOR EACH ROW WHEN ((((old.callsign)::text IS DISTINCT FROM (new.callsign)::text) OR (old.primary_domain IS DISTINCT FROM new.primary_domain) OR (old.voice_anchor IS DISTINCT FROM new.voice_anchor))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
+CREATE INDEX idx_sop_registry_status ON factory.sop_registry USING btree (status);
 
 
 --
--- Name: agent_identity trg_agent_identity_delete_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_sop_registry_tenant; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_agent_identity_delete_si AFTER DELETE ON public.agent_identity FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
+CREATE INDEX idx_sop_registry_tenant ON factory.sop_registry USING btree (tenant_id);
 
 
 --
--- Name: agent_identity trg_agent_identity_seed_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_sop_registry_tenant_status; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_agent_identity_seed_si AFTER INSERT ON public.agent_identity FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
+CREATE INDEX idx_sop_registry_tenant_status ON factory.sop_registry USING btree (tenant_id, status);
 
 
 --
--- Name: brand_messaging trg_brand_messaging_content_change; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_tasks_category; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_brand_messaging_content_change AFTER UPDATE OF category, sub_type, content ON public.brand_messaging FOR EACH ROW WHEN (((old.category IS DISTINCT FROM new.category) OR (old.sub_type IS DISTINCT FROM new.sub_type) OR (old.content IS DISTINCT FROM new.content))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
+CREATE INDEX idx_tasks_category ON factory.tasks USING btree (category);
 
 
 --
--- Name: brand_messaging trg_brand_messaging_delete_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_tasks_created; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_brand_messaging_delete_si AFTER DELETE ON public.brand_messaging FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
+CREATE INDEX idx_tasks_created ON factory.tasks USING btree (created_at DESC);
 
 
 --
--- Name: brand_messaging trg_brand_messaging_seed_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_tasks_owner; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_brand_messaging_seed_si AFTER INSERT ON public.brand_messaging FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
+CREATE INDEX idx_tasks_owner ON factory.tasks USING btree (owner);
 
 
 --
--- Name: decisions trg_decisions_content_change; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_tasks_priority; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_decisions_content_change AFTER UPDATE OF title, decision, rationale ON public.decisions FOR EACH ROW WHEN ((((old.title)::text IS DISTINCT FROM (new.title)::text) OR (old.decision IS DISTINCT FROM new.decision) OR (old.rationale IS DISTINCT FROM new.rationale))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
+CREATE INDEX idx_tasks_priority ON factory.tasks USING btree (priority);
 
 
 --
--- Name: decisions trg_decisions_delete_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_tasks_status; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_decisions_delete_si AFTER DELETE ON public.decisions FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
+CREATE INDEX idx_tasks_status ON factory.tasks USING btree (status);
 
 
 --
--- Name: decisions trg_decisions_seed_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_tasks_status_category; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_decisions_seed_si AFTER INSERT ON public.decisions FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
+CREATE INDEX idx_tasks_status_category ON factory.tasks USING btree (status, category);
 
 
 --
--- Name: document_chunks trg_document_chunks_content_change; Type: TRIGGER; Schema: public; Owner: -
+-- Name: idx_tasks_tenant; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_document_chunks_content_change BEFORE UPDATE ON public.document_chunks FOR EACH ROW WHEN (((old.content IS DISTINCT FROM new.content) OR (old.source_type IS DISTINCT FROM new.source_type) OR (old.source_name IS DISTINCT FROM new.source_name) OR (old.source_id IS DISTINCT FROM new.source_id) OR (old.chunk_index IS DISTINCT FROM new.chunk_index))) EXECUTE FUNCTION public.fn_mark_document_chunk_stale();
+CREATE INDEX idx_tasks_tenant ON factory.tasks USING btree (tenant_id);
 
 
 --
--- Name: document_chunks trg_document_chunks_delete_cleanup; Type: TRIGGER; Schema: public; Owner: -
+-- Name: mv_agent_eval_status_pk; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_document_chunks_delete_cleanup AFTER DELETE ON public.document_chunks FOR EACH ROW EXECUTE FUNCTION public.fn_document_chunk_delete_cleanup();
+CREATE UNIQUE INDEX mv_agent_eval_status_pk ON factory.mv_agent_eval_status USING btree (agent_name);
 
 
 --
--- Name: known_rules trg_known_rules_content_change; Type: TRIGGER; Schema: public; Owner: -
+-- Name: mv_dashboard_pk; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_known_rules_content_change AFTER UPDATE OF rule, category ON public.known_rules FOR EACH ROW WHEN (((old.rule IS DISTINCT FROM new.rule) OR ((old.category)::text IS DISTINCT FROM (new.category)::text))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
+CREATE UNIQUE INDEX mv_dashboard_pk ON factory.mv_dashboard USING btree ((true));
 
 
 --
--- Name: known_rules trg_known_rules_delete_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: mv_embedding_health_pk; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_known_rules_delete_si AFTER DELETE ON public.known_rules FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
+CREATE UNIQUE INDEX mv_embedding_health_pk ON factory.mv_embedding_health USING btree (tier, tenant_id);
 
 
 --
--- Name: known_rules trg_known_rules_seed_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: mv_factory_kernel_health_pk; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_known_rules_seed_si AFTER INSERT ON public.known_rules FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
+CREATE UNIQUE INDEX mv_factory_kernel_health_pk ON factory.mv_factory_kernel_health USING btree (standard);
 
 
 --
--- Name: project_knowledge trg_project_knowledge_content_change; Type: TRIGGER; Schema: public; Owner: -
+-- Name: mv_startup_snapshot_pk; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_project_knowledge_content_change AFTER UPDATE OF knowledge_type, title, detail ON public.project_knowledge FOR EACH ROW WHEN (((old.knowledge_type IS DISTINCT FROM new.knowledge_type) OR (old.title IS DISTINCT FROM new.title) OR (old.detail IS DISTINCT FROM new.detail))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
+CREATE UNIQUE INDEX mv_startup_snapshot_pk ON factory.mv_startup_snapshot USING btree (last_session_id);
 
 
 --
--- Name: project_knowledge trg_project_knowledge_delete_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: work_claims_active_uq; Type: INDEX; Schema: factory; Owner: -
 --
 
-CREATE TRIGGER trg_project_knowledge_delete_si AFTER DELETE ON public.project_knowledge FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
+CREATE UNIQUE INDEX work_claims_active_uq ON factory.work_claims USING btree (tenant_id, resource_type, resource_id) WHERE (status = 'active'::text);
 
 
 --
--- Name: project_knowledge trg_project_knowledge_seed_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: document_chunks trg_document_chunks_content_change; Type: TRIGGER; Schema: brain; Owner: -
 --
 
-CREATE TRIGGER trg_project_knowledge_seed_si AFTER INSERT ON public.project_knowledge FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
+CREATE TRIGGER trg_document_chunks_content_change BEFORE UPDATE ON brain.document_chunks FOR EACH ROW WHEN (((old.content IS DISTINCT FROM new.content) OR (old.source_type IS DISTINCT FROM new.source_type) OR (old.source_name IS DISTINCT FROM new.source_name) OR (old.source_id IS DISTINCT FROM new.source_id) OR (old.chunk_index IS DISTINCT FROM new.chunk_index))) EXECUTE FUNCTION public.fn_mark_document_chunk_stale();
 
 
 --
--- Name: sop_registry trg_sop_registry_content_change; Type: TRIGGER; Schema: public; Owner: -
+-- Name: document_chunks trg_document_chunks_delete_cleanup; Type: TRIGGER; Schema: brain; Owner: -
 --
 
-CREATE TRIGGER trg_sop_registry_content_change AFTER UPDATE OF title, summary, full_body, sop_id ON public.sop_registry FOR EACH ROW WHEN (((old.title IS DISTINCT FROM new.title) OR (old.summary IS DISTINCT FROM new.summary) OR (old.full_body IS DISTINCT FROM new.full_body) OR (old.sop_id IS DISTINCT FROM new.sop_id))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
+CREATE TRIGGER trg_document_chunks_delete_cleanup AFTER DELETE ON brain.document_chunks FOR EACH ROW EXECUTE FUNCTION public.fn_document_chunk_delete_cleanup();
 
 
 --
--- Name: sop_registry trg_sop_registry_delete_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: project_knowledge trg_project_knowledge_content_change; Type: TRIGGER; Schema: brain; Owner: -
 --
 
-CREATE TRIGGER trg_sop_registry_delete_si AFTER DELETE ON public.sop_registry FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
+CREATE TRIGGER trg_project_knowledge_content_change AFTER UPDATE OF knowledge_type, title, detail ON brain.project_knowledge FOR EACH ROW WHEN (((old.knowledge_type IS DISTINCT FROM new.knowledge_type) OR (old.title IS DISTINCT FROM new.title) OR (old.detail IS DISTINCT FROM new.detail))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
 
 
 --
--- Name: sop_registry trg_sop_registry_seed_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: project_knowledge trg_project_knowledge_delete_si; Type: TRIGGER; Schema: brain; Owner: -
 --
 
-CREATE TRIGGER trg_sop_registry_seed_si AFTER INSERT ON public.sop_registry FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
+CREATE TRIGGER trg_project_knowledge_delete_si AFTER DELETE ON brain.project_knowledge FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
 
 
 --
--- Name: tasks trg_tasks_content_change; Type: TRIGGER; Schema: public; Owner: -
+-- Name: project_knowledge trg_project_knowledge_seed_si; Type: TRIGGER; Schema: brain; Owner: -
 --
 
-CREATE TRIGGER trg_tasks_content_change AFTER UPDATE OF title, description, category ON public.tasks FOR EACH ROW WHEN ((((old.title)::text IS DISTINCT FROM (new.title)::text) OR (old.description IS DISTINCT FROM new.description) OR ((old.category)::text IS DISTINCT FROM (new.category)::text))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
+CREATE TRIGGER trg_project_knowledge_seed_si AFTER INSERT ON brain.project_knowledge FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
 
 
 --
--- Name: tasks trg_tasks_delete_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: brand_messaging trg_brand_messaging_content_change; Type: TRIGGER; Schema: brand; Owner: -
 --
 
-CREATE TRIGGER trg_tasks_delete_si AFTER DELETE ON public.tasks FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
+CREATE TRIGGER trg_brand_messaging_content_change AFTER UPDATE OF category, sub_type, content ON brand.brand_messaging FOR EACH ROW WHEN (((old.category IS DISTINCT FROM new.category) OR (old.sub_type IS DISTINCT FROM new.sub_type) OR (old.content IS DISTINCT FROM new.content))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
 
 
 --
--- Name: tasks trg_tasks_seed_si; Type: TRIGGER; Schema: public; Owner: -
+-- Name: brand_messaging trg_brand_messaging_delete_si; Type: TRIGGER; Schema: brand; Owner: -
 --
 
-CREATE TRIGGER trg_tasks_seed_si AFTER INSERT ON public.tasks FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
+CREATE TRIGGER trg_brand_messaging_delete_si AFTER DELETE ON brand.brand_messaging FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
 
 
 --
--- Name: agent_identity agent_identity_agent_name_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: brand_messaging trg_brand_messaging_seed_si; Type: TRIGGER; Schema: brand; Owner: -
 --
 
-ALTER TABLE ONLY public.agent_identity
-    ADD CONSTRAINT agent_identity_agent_name_fkey FOREIGN KEY (agent_name) REFERENCES public.agent_state(agent_name) ON UPDATE CASCADE;
+CREATE TRIGGER trg_brand_messaging_seed_si AFTER INSERT ON brand.brand_messaging FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
 
 
 --
--- Name: content_staging content_staging_research_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: agent_identity trg_agent_identity_content_change; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.content_staging
-    ADD CONSTRAINT content_staging_research_id_fkey FOREIGN KEY (research_id) REFERENCES public.research(id) ON DELETE SET NULL;
+CREATE TRIGGER trg_agent_identity_content_change AFTER UPDATE OF callsign, primary_domain, voice_anchor ON factory.agent_identity FOR EACH ROW WHEN ((((old.callsign)::text IS DISTINCT FROM (new.callsign)::text) OR (old.primary_domain IS DISTINCT FROM new.primary_domain) OR (old.voice_anchor IS DISTINCT FROM new.voice_anchor))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
 
 
 --
--- Name: content_staging content_staging_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: agent_identity trg_agent_identity_delete_si; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.content_staging
-    ADD CONSTRAINT content_staging_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.factory_sessions(id) ON DELETE SET NULL;
+CREATE TRIGGER trg_agent_identity_delete_si AFTER DELETE ON factory.agent_identity FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
 
 
 --
--- Name: research research_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: agent_identity trg_agent_identity_seed_si; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.research
-    ADD CONSTRAINT research_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.factory_sessions(id) ON DELETE SET NULL;
+CREATE TRIGGER trg_agent_identity_seed_si AFTER INSERT ON factory.agent_identity FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
 
 
 --
--- Name: research research_superseded_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: decisions trg_decisions_content_change; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.research
-    ADD CONSTRAINT research_superseded_by_fkey FOREIGN KEY (superseded_by) REFERENCES public.research(id) ON DELETE SET NULL;
+CREATE TRIGGER trg_decisions_content_change AFTER UPDATE OF title, decision, rationale ON factory.decisions FOR EACH ROW WHEN ((((old.title)::text IS DISTINCT FROM (new.title)::text) OR (old.decision IS DISTINCT FROM new.decision) OR (old.rationale IS DISTINCT FROM new.rationale))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
 
 
 --
--- Name: retrieval_eval_results retrieval_eval_results_case_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: decisions trg_decisions_delete_si; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.retrieval_eval_results
-    ADD CONSTRAINT retrieval_eval_results_case_id_fkey FOREIGN KEY (case_id) REFERENCES public.retrieval_eval_cases(case_id) ON DELETE CASCADE;
+CREATE TRIGGER trg_decisions_delete_si AFTER DELETE ON factory.decisions FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
 
 
 --
--- Name: retrieval_eval_results retrieval_eval_results_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: decisions trg_decisions_seed_si; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.retrieval_eval_results
-    ADD CONSTRAINT retrieval_eval_results_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.retrieval_eval_runs(run_id) ON DELETE CASCADE;
+CREATE TRIGGER trg_decisions_seed_si AFTER INSERT ON factory.decisions FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
 
 
 --
--- Name: rimmer_runs rimmer_runs_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: known_rules trg_known_rules_content_change; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.rimmer_runs
-    ADD CONSTRAINT rimmer_runs_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.factory_sessions(id) ON DELETE SET NULL;
+CREATE TRIGGER trg_known_rules_content_change AFTER UPDATE OF rule, category ON factory.known_rules FOR EACH ROW WHEN (((old.rule IS DISTINCT FROM new.rule) OR ((old.category)::text IS DISTINCT FROM (new.category)::text))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
 
 
 --
--- Name: session_mcp_status session_mcp_status_connector_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: known_rules trg_known_rules_delete_si; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.session_mcp_status
-    ADD CONSTRAINT session_mcp_status_connector_id_fkey FOREIGN KEY (connector_id) REFERENCES public.mcp_registry(connector_id) ON UPDATE CASCADE;
+CREATE TRIGGER trg_known_rules_delete_si AFTER DELETE ON factory.known_rules FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
 
 
 --
--- Name: session_mcp_status session_mcp_status_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: known_rules trg_known_rules_seed_si; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.session_mcp_status
-    ADD CONSTRAINT session_mcp_status_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.factory_sessions(id) ON DELETE CASCADE;
+CREATE TRIGGER trg_known_rules_seed_si AFTER INSERT ON factory.known_rules FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
 
 
 --
--- Name: sop_steps sop_steps_sop_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: sop_registry trg_sop_registry_content_change; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.sop_steps
-    ADD CONSTRAINT sop_steps_sop_id_fkey FOREIGN KEY (sop_id) REFERENCES public.sop_registry(sop_id) ON DELETE CASCADE;
+CREATE TRIGGER trg_sop_registry_content_change AFTER UPDATE OF title, summary, full_body, sop_id ON factory.sop_registry FOR EACH ROW WHEN (((old.title IS DISTINCT FROM new.title) OR (old.summary IS DISTINCT FROM new.summary) OR (old.full_body IS DISTINCT FROM new.full_body) OR (old.sop_id IS DISTINCT FROM new.sop_id))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
 
 
 --
--- Name: tasks tasks_blocked_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: sop_registry trg_sop_registry_delete_si; Type: TRIGGER; Schema: factory; Owner: -
 --
 
-ALTER TABLE ONLY public.tasks
-    ADD CONSTRAINT tasks_blocked_by_fkey FOREIGN KEY (blocked_by) REFERENCES public.tasks(id);
+CREATE TRIGGER trg_sop_registry_delete_si AFTER DELETE ON factory.sop_registry FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
+
+
+--
+-- Name: sop_registry trg_sop_registry_seed_si; Type: TRIGGER; Schema: factory; Owner: -
+--
+
+CREATE TRIGGER trg_sop_registry_seed_si AFTER INSERT ON factory.sop_registry FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
+
+
+--
+-- Name: tasks trg_tasks_content_change; Type: TRIGGER; Schema: factory; Owner: -
+--
+
+CREATE TRIGGER trg_tasks_content_change AFTER UPDATE OF title, description, category ON factory.tasks FOR EACH ROW WHEN ((((old.title)::text IS DISTINCT FROM (new.title)::text) OR (old.description IS DISTINCT FROM new.description) OR ((old.category)::text IS DISTINCT FROM (new.category)::text))) EXECUTE FUNCTION public.fn_mark_embedding_stale();
+
+
+--
+-- Name: tasks trg_tasks_delete_si; Type: TRIGGER; Schema: factory; Owner: -
+--
+
+CREATE TRIGGER trg_tasks_delete_si AFTER DELETE ON factory.tasks FOR EACH ROW EXECUTE FUNCTION public.fn_delete_semantic_index_for_source();
+
+
+--
+-- Name: tasks trg_tasks_seed_si; Type: TRIGGER; Schema: factory; Owner: -
+--
+
+CREATE TRIGGER trg_tasks_seed_si AFTER INSERT ON factory.tasks FOR EACH ROW EXECUTE FUNCTION public.fn_seed_semantic_index();
+
+
+--
+-- Name: research research_session_id_fkey; Type: FK CONSTRAINT; Schema: brain; Owner: -
+--
+
+ALTER TABLE ONLY brain.research
+    ADD CONSTRAINT research_session_id_fkey FOREIGN KEY (session_id) REFERENCES factory.factory_sessions(id) ON DELETE SET NULL;
+
+
+--
+-- Name: research research_superseded_by_fkey; Type: FK CONSTRAINT; Schema: brain; Owner: -
+--
+
+ALTER TABLE ONLY brain.research
+    ADD CONSTRAINT research_superseded_by_fkey FOREIGN KEY (superseded_by) REFERENCES brain.research(id) ON DELETE SET NULL;
+
+
+--
+-- Name: content_staging content_staging_research_id_fkey; Type: FK CONSTRAINT; Schema: brand; Owner: -
+--
+
+ALTER TABLE ONLY brand.content_staging
+    ADD CONSTRAINT content_staging_research_id_fkey FOREIGN KEY (research_id) REFERENCES brain.research(id) ON DELETE SET NULL;
+
+
+--
+-- Name: content_staging content_staging_session_id_fkey; Type: FK CONSTRAINT; Schema: brand; Owner: -
+--
+
+ALTER TABLE ONLY brand.content_staging
+    ADD CONSTRAINT content_staging_session_id_fkey FOREIGN KEY (session_id) REFERENCES factory.factory_sessions(id) ON DELETE SET NULL;
+
+
+--
+-- Name: agent_identity agent_identity_agent_name_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.agent_identity
+    ADD CONSTRAINT agent_identity_agent_name_fkey FOREIGN KEY (agent_name) REFERENCES factory.agent_state(agent_name) ON UPDATE CASCADE;
+
+
+--
+-- Name: persona fk_persona_current_version; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona
+    ADD CONSTRAINT fk_persona_current_version FOREIGN KEY (current_version) REFERENCES factory.persona_version(id);
+
+
+--
+-- Name: persona_archetype persona_archetype_version_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_archetype
+    ADD CONSTRAINT persona_archetype_version_id_fkey FOREIGN KEY (version_id) REFERENCES factory.persona_version(id) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_asset persona_asset_agent_name_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_asset
+    ADD CONSTRAINT persona_asset_agent_name_fkey FOREIGN KEY (agent_name) REFERENCES factory.persona(agent_name) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_build persona_build_agent_name_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_build
+    ADD CONSTRAINT persona_build_agent_name_fkey FOREIGN KEY (agent_name) REFERENCES factory.persona(agent_name);
+
+
+--
+-- Name: persona_build persona_build_persona_version_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_build
+    ADD CONSTRAINT persona_build_persona_version_fkey FOREIGN KEY (persona_version) REFERENCES factory.persona_version(id);
+
+
+--
+-- Name: persona_character_bible persona_character_bible_version_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_character_bible
+    ADD CONSTRAINT persona_character_bible_version_id_fkey FOREIGN KEY (version_id) REFERENCES factory.persona_version(id) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_character_dimension persona_character_dimension_version_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_character_dimension
+    ADD CONSTRAINT persona_character_dimension_version_id_fkey FOREIGN KEY (version_id) REFERENCES factory.persona_version(id) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_drift_check persona_drift_check_agent_name_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_drift_check
+    ADD CONSTRAINT persona_drift_check_agent_name_fkey FOREIGN KEY (agent_name) REFERENCES factory.persona(agent_name) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_drift_check persona_drift_check_export_target_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_drift_check
+    ADD CONSTRAINT persona_drift_check_export_target_id_fkey FOREIGN KEY (export_target_id) REFERENCES factory.persona_export_target(id) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_drift_check persona_drift_check_version_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_drift_check
+    ADD CONSTRAINT persona_drift_check_version_id_fkey FOREIGN KEY (version_id) REFERENCES factory.persona_version(id) ON DELETE SET NULL;
+
+
+--
+-- Name: persona_eval_criteria persona_eval_criteria_agent_name_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_eval_criteria
+    ADD CONSTRAINT persona_eval_criteria_agent_name_fkey FOREIGN KEY (agent_name) REFERENCES factory.persona(agent_name);
+
+
+--
+-- Name: persona_export_target persona_export_target_agent_name_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_export_target
+    ADD CONSTRAINT persona_export_target_agent_name_fkey FOREIGN KEY (agent_name) REFERENCES factory.persona(agent_name) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_export_target persona_export_target_generated_from_version_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_export_target
+    ADD CONSTRAINT persona_export_target_generated_from_version_fkey FOREIGN KEY (generated_from_version) REFERENCES factory.persona_version(id);
+
+
+--
+-- Name: persona_lane_contract persona_lane_contract_version_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_lane_contract
+    ADD CONSTRAINT persona_lane_contract_version_id_fkey FOREIGN KEY (version_id) REFERENCES factory.persona_version(id) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_provenance persona_provenance_agent_name_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_provenance
+    ADD CONSTRAINT persona_provenance_agent_name_fkey FOREIGN KEY (agent_name) REFERENCES factory.persona(agent_name) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_provenance persona_provenance_version_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_provenance
+    ADD CONSTRAINT persona_provenance_version_id_fkey FOREIGN KEY (version_id) REFERENCES factory.persona_version(id) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_strength persona_strength_version_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_strength
+    ADD CONSTRAINT persona_strength_version_id_fkey FOREIGN KEY (version_id) REFERENCES factory.persona_version(id) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_tool persona_tool_version_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_tool
+    ADD CONSTRAINT persona_tool_version_id_fkey FOREIGN KEY (version_id) REFERENCES factory.persona_version(id) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_version persona_version_agent_name_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_version
+    ADD CONSTRAINT persona_version_agent_name_fkey FOREIGN KEY (agent_name) REFERENCES factory.persona(agent_name) ON DELETE CASCADE;
+
+
+--
+-- Name: persona_voice_contract persona_voice_contract_version_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.persona_voice_contract
+    ADD CONSTRAINT persona_voice_contract_version_id_fkey FOREIGN KEY (version_id) REFERENCES factory.persona_version(id) ON DELETE CASCADE;
+
+
+--
+-- Name: retrieval_eval_results retrieval_eval_results_case_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.retrieval_eval_results
+    ADD CONSTRAINT retrieval_eval_results_case_id_fkey FOREIGN KEY (case_id) REFERENCES factory.retrieval_eval_cases(case_id) ON DELETE CASCADE;
+
+
+--
+-- Name: retrieval_eval_results retrieval_eval_results_run_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.retrieval_eval_results
+    ADD CONSTRAINT retrieval_eval_results_run_id_fkey FOREIGN KEY (run_id) REFERENCES factory.retrieval_eval_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: rimmer_runs rimmer_runs_session_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.rimmer_runs
+    ADD CONSTRAINT rimmer_runs_session_id_fkey FOREIGN KEY (session_id) REFERENCES factory.factory_sessions(id) ON DELETE SET NULL;
+
+
+--
+-- Name: session_mcp_status session_mcp_status_connector_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.session_mcp_status
+    ADD CONSTRAINT session_mcp_status_connector_id_fkey FOREIGN KEY (connector_id) REFERENCES factory.mcp_registry(connector_id) ON UPDATE CASCADE;
+
+
+--
+-- Name: session_mcp_status session_mcp_status_session_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.session_mcp_status
+    ADD CONSTRAINT session_mcp_status_session_id_fkey FOREIGN KEY (session_id) REFERENCES factory.factory_sessions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sop_steps sop_steps_sop_id_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.sop_steps
+    ADD CONSTRAINT sop_steps_sop_id_fkey FOREIGN KEY (sop_id) REFERENCES factory.sop_registry(sop_id) ON DELETE CASCADE;
+
+
+--
+-- Name: tasks tasks_blocked_by_fkey; Type: FK CONSTRAINT; Schema: factory; Owner: -
+--
+
+ALTER TABLE ONLY factory.tasks
+    ADD CONSTRAINT tasks_blocked_by_fkey FOREIGN KEY (blocked_by) REFERENCES factory.tasks(id);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict J1jM5rGdT7geAnNpDE1aMZuZePVcefBQZhqB5sCBSZ6VkX0LHaAzBIscLUZO03s
+\unrestrict tdKnhmigJeJxBsRQQgPmJopeXyHehkcwWkYdHwYTEbjasYJOsAcjdyKSyRs4fBH
 
+
+--
+-- O-Matic gold standard: private kernel, public interface only.
+-- Kernel schemas are not reachable by unprivileged roles; access is via public views/functions.
+--
+REVOKE USAGE ON SCHEMA factory, brain, brand FROM PUBLIC;

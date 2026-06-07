@@ -31,6 +31,8 @@ If you connect an O-Matic agent (Probot, Fred, Data, …) to this server, the ag
 
 Retrieval is hybrid (FTS + vector via RRF). Embeddings are OpenAI `text-embedding-3-small` (1536-d). See `docs/` for the full standard.
 
+**Schema layout (private kernel, public interface):** state lives in purpose schemas — `factory.*` (config, rules, SOPs, sessions, decisions, tasks, agreements, personas), `brain.*` (semantic_index, document_chunks, knowledge), `brand.*` — and `public` holds **only** the interface (views + functions; no base tables). `setup.sh` sets the database `search_path` to `public, factory, brain, brand` and revokes `USAGE` on the kernel schemas from `PUBLIC`, so callers reach the factory through the public interface, never the kernel directly.
+
 **Catalog integrity (the contract):** every Tier-1 source has **three** triggers — INSERT seeds the catalog row, UPDATE marks it stale, DELETE cascades. The INSERT seed is the one most setups forget; without it, new rows silently never reach vector search. Each catalog row carries an `authority_tier` (sacred / canon / operational / experimental / archived / deprecated), assigned at write time, so retrieval can weight trusted memory over noise.
 
 ## Setup

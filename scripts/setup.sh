@@ -26,13 +26,20 @@ echo "O-Matic Server setup — factory '${TENANT}'"
 echo
 
 # --- 1. Schema (load only if not already present) --------------------------
-if [ "$("${PSQL[@]}" -c "SELECT to_regclass('public.semantic_index') IS NOT NULL;")" = "t" ]; then
+if [ "$("${PSQL[@]}" -c "SELECT to_regclass('brain.semantic_index') IS NOT NULL;")" = "t" ]; then
   echo "[1/3] Schema already present — skipping."
 else
   echo "[1/3] Loading schema (sql/01_schema.sql)..."
   "${PSQL[@]}" -v ON_ERROR_STOP=1 -f "$ROOT/sql/01_schema.sql" >/dev/null
   echo "      Schema loaded."
 fi
+
+# Kernel isolation: functions reference kernel tables unqualified, so every
+# session on this database must resolve names against the kernel + interface
+# schemas. Set it at the database level so all connections inherit it.
+DBNAME="$("${PSQL[@]}" -c "SELECT current_database();")"
+"${PSQL[@]}" -v ON_ERROR_STOP=1 -c "ALTER DATABASE \"${DBNAME}\" SET search_path = public, factory, brain, brand;" >/dev/null
+echo "      search_path set (public, factory, brain, brand)."
 
 # --- 2. In-DB maintenance (tolerate pg_cron not yet enabled) ----------------
 echo "[2/3] Scheduling in-DB maintenance (sql/02_bootstrap.sql)..."
@@ -45,14 +52,14 @@ fi
 
 # --- 3. Embedding key onboarding (bring your own) --------------------------
 echo "[3/3] Embedding key..."
-"${PSQL[@]}" -c "INSERT INTO public.factory_config (tenant_id, category, key, value)
+"${PSQL[@]}" -c "INSERT INTO factory.factory_config (tenant_id, category, key, value)
   VALUES ('${TENANT}','embedding','openai_embedding_model', to_jsonb('${MODEL}'::text))
   ON CONFLICT (tenant_id, key) DO UPDATE SET value = EXCLUDED.value;" >/dev/null
 echo "      Embedding model set to ${MODEL}."
 
 KEY="${OPENAI_API_KEY:-}"
 if [ -z "$KEY" ]; then
-  KEY="$("${PSQL[@]}" -c "SELECT value #>> '{}' FROM public.factory_config
+  KEY="$("${PSQL[@]}" -c "SELECT value #>> '{}' FROM factory.factory_config
     WHERE tenant_id='${TENANT}' AND category='embedding' AND key='openai_api_key';" || true)"
 fi
 
@@ -98,7 +105,7 @@ echo "      Key valid (${DIMS}-dim)."
 echo "      Store the key where?  [e] env var only (recommended)  [d] factory_config (lands in backups)"
 read -r -p "      Choice [e/d]: " WHERE
 if [ "${WHERE:-e}" = "d" ]; then
-  "${PSQL[@]}" -c "INSERT INTO public.factory_config (tenant_id, category, key, value)
+  "${PSQL[@]}" -c "INSERT INTO factory.factory_config (tenant_id, category, key, value)
     VALUES ('${TENANT}','embedding','openai_api_key', to_jsonb('${KEY}'::text))
     ON CONFLICT (tenant_id, key) DO UPDATE SET value = EXCLUDED.value;" >/dev/null
   echo "      Key stored in factory_config for '${TENANT}'."
