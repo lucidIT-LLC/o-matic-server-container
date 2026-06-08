@@ -1,6 +1,6 @@
 # Factory Vector Memory Design Standard
 
-Updated: 2026-06-03
+Updated: 2026-06-07
 
 This document defines the portable vector-memory design for an O-Matic factory. Any factory using the O-Matic Server should be able to implement retrieval from this file without inheriting project-specific assumptions from another factory.
 
@@ -237,9 +237,11 @@ Three triggers are REQUIRED on every Tier 1 source table — not two. A factory 
 
 - **INSERT** → seed the `semantic_index` row (`summary_text`, `authority_tier`, `embedding_stale = true`), `ON CONFLICT DO NOTHING`. This is the one most factories forget. Equivalently, the write path (writer/lib code) may seed inline (embed-on-write), but a trigger is the only safety net that also catches direct SQL and operator edits.
 - **UPDATE** → mark `embedding_stale = true`, gated on content-bearing columns only (`AFTER UPDATE OF <cols> ... WHEN (OLD.col IS DISTINCT FROM NEW.col)`) so routine metadata edits do not churn embeddings.
-- **DELETE** → cascade-delete the matching `semantic_index` row so no orphan remains.
+- **DELETE** → cascade-delete the matching `semantic_index` row so no orphan remains. Verify this holds for **bulk and cross-table deletes**: deleting `document_chunks` (or any Tier 3 source) as a set can leave orphaned `semantic_index` rows if the trigger keys on the wrong column or is bypassed by a set-based delete. After any large delete, confirm no `semantic_index` row points to a source that no longer exists.
 
 Postgres should not be assumed to generate embeddings — it cannot call an embedding API from inside a function. The triggers seed and flag; a real external embed generator fills the vectors and is verified separately.
+
+**Both tiers need a refresh path.** The external embed generator must cover **both** `semantic_index` (Tier 1) and `document_chunks` (Tier 2). A common gap: a refresh job that re-embeds only Tier 1 leaves edited Tier-2 chunks permanently stale — the chunk's content changed but its vector never updates and nothing flags it. `v_embedding_health` must report `stale = 0` and `unembedded = 0` for **both** tiers, and the canonical refresh path must be able to re-embed either.
 
 ## Retrieval Logging
 
@@ -484,8 +486,9 @@ Use this checklist for new factories and periodic health checks:
 - search functions exist and return live rows.
 - `NULL::vector` search falls back to FTS-only.
 - query-vector search can use HNSW candidate scans.
-- `v_embedding_health` shows zero stale and zero unembedded rows.
+- `v_embedding_health` shows zero stale and zero unembedded rows for **both** `semantic_index` and `document_chunks` (Tier-2 staleness needs a refresh path too).
 - every active Tier 3 source row has a matching `semantic_index` row — no uncatalogued rows.
+- no **orphaned** `semantic_index` rows — every catalog row points to a source that still exists (bulk and cross-table deletes can leave orphans).
 - source-table INSERT/UPDATE/DELETE triggers exist: INSERT seeds the catalog, UPDATE marks stale, DELETE cascades. Missing INSERT seed is the most common silent defect.
 - `authority_tier` is populated on every `semantic_index` row and assigned at write time.
 - retrieval events are logged in mature deployments.
@@ -519,4 +522,13 @@ Two standards added after a factory audit found a defect this document had propa
 - **INSERT seed is now mandatory.** Earlier revisions specified only UPDATE (mark stale) and DELETE (cascade) triggers. Any factory built to that contract silently dropped every newly inserted Tier 3 row out of vector search — the row existed, but no `semantic_index` entry was created and no health metric flagged it. The Freshness Contract now requires a third trigger (INSERT seed) or a verified inline embed-on-write path. Factories built on prior revisions should audit for uncatalogued rows and add the INSERT seed.
 - **Authority tiers added.** `semantic_index` now carries `authority_tier` (sacred / canon / operational / experimental / archived / deprecated), assigned at write time, so retrieval and conflict resolution can weight trusted memory over noise instead of treating every chunk equally. Tier-weighted ranking inside the search functions is the recommended next step.
 
-These came from an audit principle worth stating directly: a vector database full of ungoverned, equally-weighted chunks is not a brain — it is a filing cabinet. Curation and authority matter as much as embeddings and indexes.
+These came from an audit principle worth stating directly: a vector database full of ungoverned, equally-weighted chunks is not a brain — it is a junk drawer. Curation and authority matter as much as embeddings and indexes.
+
+### 2026-06-07 — Cascade integrity + both-tier freshness
+
+From a full-factory drift audit (O-Matic Session 80):
+
+- **DELETE cascade must be verified, not assumed.** A bulk delete of Tier-2 `document_chunks` left orphaned `semantic_index` rows — the catalog pointed at sources that no longer existed. Migrations and periodic audits must check for orphans (catalog rows whose source is gone), not only for uncatalogued rows. Catalog integrity runs in **both** directions.
+- **Embedding freshness is a two-tier contract.** The canonical refresh path must re-embed `document_chunks` as well as `semantic_index`. A Tier-1-only refresher leaves edited Tier-2 chunks permanently stale. `v_embedding_health` must read zero stale and zero unembedded for both tiers.
+- **This standard is canon in commons.** Factories pull it from the shared commons KB (the `kb` connection) and align to it — they do not fork or re-derive it locally. The brain is pgvector + HNSW only; no other vector backend.
+
