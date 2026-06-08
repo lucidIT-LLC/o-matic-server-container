@@ -6,8 +6,7 @@
 # Built FROM pgvector/pgvector:pg18 (upstream — pgvector pre-installed, auto-updates
 # on rebuild). pg_cron comes from the Debian PostgreSQL apt repo.
 #
-# Vector index method is pgvector HNSW. pgvectorscale/diskann is NOT used and is
-# intentionally not built — the factory brain runs on pgvector HNSW alone.
+# Vector index method is pgvector HNSW — the factory brain runs on pgvector HNSW alone.
 #
 # After first start, enable pg_cron once (requires a restart for the preload):
 #   ALTER SYSTEM SET shared_preload_libraries = 'pg_cron';
