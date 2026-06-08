@@ -23,7 +23,7 @@ If you connect an O-Matic agent (Probot, Fred, Data, …) to this server, the ag
 - **pg_cron** for in-database scheduled maintenance
 - gosu rebuilt from current Go (clears the stdlib CVEs in upstream's bundled binary)
 
-> This image does **not** use pgvectorscale / diskann. The brain runs on pgvector HNSW alone. (Earlier builds carried a `pg18-vectorscale` tag and an unused vectorscale build stage — both removed.)
+> The brain runs on **pgvector HNSW** alone — HNSW is the only vector index method.
 
 ## Memory architecture
 
