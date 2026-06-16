@@ -1,10 +1,10 @@
 # O-Matic Server
 
-> **What this is:** the self-hosted database brain for an O-Matic factory — a Docker image.
+> **What this is:** the self-hosted **O-Matic Server** for a factory — the database/server layer, as a Docker image.
 > **What this is NOT:** a plugin, an MCP server, or anything you install into Claude Code or Codex.
 > To connect an agent to this server, use the **o-matic-server-connection** plugin.
 
-The **database brain** for an O-Matic factory. An O-Matic factory is a set of AI agents that share persistent memory, governed rules, task state, and decision history — none of which survives in a chat window. This server is where all of that lives: **PostgreSQL 18 + pgvector (HNSW) + pg_cron**, packaged as a container image with a reproducible schema and a bring-your-own-key embedding path. One database — no external vector store, no second system to coordinate.
+The **O-Matic Server** — the database/server layer for an O-Matic factory. An O-Matic factory is a set of AI agents that share persistent memory, governed rules, task state, and decision history — none of which survives in a chat window. The O-Matic Server is where all of that lives (it functions as the factory brain, but the product is the *server*): **PostgreSQL 18 + pgvector (HNSW) + pg_cron**, packaged as a container image with a reproducible schema and a bring-your-own-key embedding path. One database — no external vector store, no second system to coordinate.
 
 If you connect an O-Matic agent (Probot, Fred, Data, …) to this server, the agent gains: semantic + keyword recall over everything the factory knows, rules it must follow, a task board, a decision log, and an audit trail. Without it, the agents still run — they just start blank every session.
 
