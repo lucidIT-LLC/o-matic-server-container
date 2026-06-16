@@ -10,3 +10,7 @@ __pycache__/
 
 # local
 .DS_Store
+
+# License signing key — operator-held secret, NEVER commit
+keys/omatic-license-priv.pem
+keys/*priv*

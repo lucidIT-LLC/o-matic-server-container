@@ -8,6 +8,18 @@ The **database brain** for an O-Matic factory. An O-Matic factory is a set of AI
 
 If you connect an O-Matic agent (Probot, Fred, Data, …) to this server, the agent gains: semantic + keyword recall over everything the factory knows, rules it must follow, a task board, a decision log, and an audit trail. Without it, the agents still run — they just start blank every session.
 
+## Activation key
+
+This image is **free to pull and public to inspect**, but the container **requires an activation key** to start. Pass an O-Matic-issued key as `OMATIC_LICENSE_KEY`:
+
+```bash
+docker run -e OMATIC_LICENSE_KEY="<your-key>" -v omatic-data:/var/lib/postgresql/data ghcr.io/lucidit-llc/o-matic-server-container
+```
+
+Without a valid key the container exits immediately with instructions. **Get a key at [o-matic.ai](https://o-matic.ai).**
+
+**How it works:** the key is an Ed25519-signed token (`payload.signature`). The image embeds only the **public** key and verifies the signature **offline at startup** — no phone-home, nothing leaves your host. lucidIT-LLC holds the private signing key, so keys can't be forged. Honest scope: this repo is public, so the check is **activation + accountability, not hard DRM** — a determined user could fork and remove it. Keys may carry an optional expiry. See `scripts/omatic-entrypoint.sh` (the gate) and `scripts/issue-license.sh` (issuer, private-key-only).
+
 ## Requirements
 
 - **A container host** — Docker or Podman (Unraid, a Linux box, a VPS, etc.) with a **persistent volume** for the Postgres data directory. ~1 GB RAM and a modest CPU are plenty for a single factory.
@@ -41,7 +53,7 @@ Retrieval is hybrid (FTS + vector via RRF). Embeddings are OpenAI `text-embeddin
 
 ## Setup
 
-1. **Start the container** against a data volume.
+1. **Start the container** against a data volume, with your `OMATIC_LICENSE_KEY` set (see [Activation key](#activation-key)). The container won't start without it.
 2. **Enable pg_cron** — one-time, and the only step that needs a restart (it's a Postgres preload requirement):
    ```sql
    ALTER SYSTEM SET shared_preload_libraries = 'pg_cron';   -- then restart the container
