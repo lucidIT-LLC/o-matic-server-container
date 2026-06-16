@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/o-matic-server
+  IMAGE: ghcr.io/${{ github.repository_owner }}/o-matic-server-container
 
 jobs:
   build:
