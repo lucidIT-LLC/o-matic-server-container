@@ -10,9 +10,6 @@ on:
     - cron: "0 12 * * 1"
   workflow_dispatch:
 
-env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/o-matic-server-container
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,6 +22,10 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
+          # GHCR requires a lowercase repository path; github.repository_owner
+          # may be mixed-case (e.g. lucidIT-LLC), so lowercase it explicitly.
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER}/o-matic-server-container"
           DATE="$(date -u +'%Y.%m.%d')"
           # Immutable date-stamped tag for pinning + rollback, plus floating tags.
           echo "tags=${IMAGE}:${DATE},${IMAGE}:pg18,${IMAGE}:latest" >> "$GITHUB_OUTPUT"
