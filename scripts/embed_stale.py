@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-embed_stale.py - O-Matic canonical stale Tier-1 embedder.
+embed_stale.py - O-Matic canonical Tier-1 + Tier-2 embedder.
 
-Refreshes stale/unembedded rows in public.semantic_index for tenant "omatic".
+Refreshes stale/unembedded rows in:
+  - public.semantic_index  (Tier 1 - entity catalog, uses summary_text)
+  - public.document_chunks (Tier 2 - full content, uses content)
+
+Both passes run sequentially for tenant "omatic".
 
 Design constraints:
   - stdlib only: urllib for OpenAI, subprocess + psql for Postgres
@@ -147,6 +151,49 @@ def write_embedding(row_id, vector, model):
     )
 
 
+def get_stale_chunks():
+    raw = psql(
+        "SELECT coalesce(json_agg(json_build_object('id', id, 'text', content) ORDER BY id), '[]'::json) "
+        f"FROM {SCHEMA}.document_chunks "
+        f"WHERE tenant_id = {sql_quote(TENANT)} "
+        "AND (embedding IS NULL OR embedding_stale = true);"
+    )
+    return json.loads(raw or "[]")
+
+
+def write_chunk_embedding(row_id, vector, model):
+    literal = "[" + ",".join(repr(round(float(v), 8)) for v in vector) + "]"
+    psql(
+        f"UPDATE {SCHEMA}.document_chunks "
+        "SET "
+        f"embedding = {sql_quote(literal)}::vector, "
+        "embedding_stale = false, "
+        f"model_version = {sql_quote(model)}, "
+        "embedded_at = now() "
+        f"WHERE id = {int(row_id)} AND tenant_id = {sql_quote(TENANT)};"
+    )
+
+
+def embed_tier(label, rows, api_key, model, write_fn):
+    if not rows:
+        print(f"embed_stale [{label}]: nothing to do - clean")
+        return 0
+    print(f"embed_stale [{label}]: {len(rows)} stale rows (tenant={TENANT}, model={model})")
+    total = 0
+    for offset in range(0, len(rows), BATCH_SIZE):
+        batch = rows[offset : offset + BATCH_SIZE]
+        texts = [(row.get("text") or "")[:8000] for row in batch]
+        vectors = embed_texts(api_key, model, texts)
+        dims = {len(vector) for vector in vectors}
+        if dims != {EXPECTED_DIM}:
+            raise RuntimeError(f"[{label}] unexpected embedding dims {sorted(dims)}, expected {EXPECTED_DIM}")
+        for row, vector in zip(batch, vectors):
+            write_fn(row["id"], vector, model)
+        total += len(batch)
+        print(f"  [{label}] batch {offset // BATCH_SIZE + 1}: embedded {len(batch)} (total {total}/{len(rows)})")
+    return total
+
+
 def main():
     assert_db()
     config = get_embedding_config()
@@ -163,30 +210,24 @@ def main():
         )
         sys.exit(1)
 
-    stale = get_stale_rows()
-    if not stale:
-        print("embed_stale: nothing to do - semantic_index is clean")
-        return
+    # Tier 1 - semantic_index (entity catalog)
+    t1_total = embed_tier("tier1:semantic_index", get_stale_rows(), api_key, model, write_embedding)
 
-    print(f"embed_stale: {len(stale)} stale rows to embed (tenant={TENANT}, model={model})")
-    total = 0
-    for offset in range(0, len(stale), BATCH_SIZE):
-        batch = stale[offset : offset + BATCH_SIZE]
-        texts = [(row.get("text") or "")[:8000] for row in batch]
-        vectors = embed_texts(api_key, model, texts)
-        dims = {len(vector) for vector in vectors}
-        if dims != {EXPECTED_DIM}:
-            raise RuntimeError(f"unexpected embedding dims {sorted(dims)}, expected {EXPECTED_DIM}")
-        for row, vector in zip(batch, vectors):
-            write_embedding(row["id"], vector, model)
-        total += len(batch)
-        print(f"  batch {offset // BATCH_SIZE + 1}: embedded {len(batch)} (total {total}/{len(stale)})")
+    # Tier 2 - document_chunks (full content)
+    t2_total = embed_tier("tier2:document_chunks", get_stale_chunks(), api_key, model, write_chunk_embedding)
 
-    remaining = psql(
+    t1_remaining = psql(
         f"SELECT count(*) FROM {SCHEMA}.semantic_index "
         f"WHERE tenant_id = {sql_quote(TENANT)} AND (embedding IS NULL OR embedding_stale = true);"
     )
-    print(f"embed_stale: done - {total} embedded. Remaining stale: {remaining}")
+    t2_remaining = psql(
+        f"SELECT count(*) FROM {SCHEMA}.document_chunks "
+        f"WHERE tenant_id = {sql_quote(TENANT)} AND (embedding IS NULL OR embedding_stale = true);"
+    )
+    print(
+        f"embed_stale: done - tier1 embedded={t1_total} remaining={t1_remaining} | "
+        f"tier2 embedded={t2_total} remaining={t2_remaining}"
+    )
 
 
 if __name__ == "__main__":
